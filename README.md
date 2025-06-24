@@ -121,7 +121,7 @@ python generate_synthetic_data.py \
 
 ```
 python3 preprocess_data.py \
-    --input-file path/to/input.txt \
+    --input-dir path/to/data/directory \
     --output-file path/to/output.jsonl \
     --max-tokens 2048 \
     --skip-header "Header text to skip"
