@@ -1,4 +1,5 @@
 import json
+import os
 from transformers import AutoTokenizer
 from utils.logger import setup_app_logger
 import trankit
@@ -6,7 +7,7 @@ from tqdm import tqdm
 import argparse
 
 # --- Configuration ---
-INPUT_FILE_PATH = "../source_data/1.txt"
+INPUT_FOLDER_PATH = "../source_data/"
 OUTPUT_JSONL_PATH = "../data/processed_data.jsonl"
 MAX_TOKENS_PER_CHUNK = 2048 # As per your requirement
 FIRST_LINE_TO_SKIP = "هذا الملف آليا بواسطة المكتبة الشاملة"
@@ -132,20 +133,58 @@ class Processor:
             raise
 
     # --- Main Processing Logic ---
-    def process_file(self, input_file_path, output_jsonl_path, skip_header_line=None):
+    def process_folder(self, input_folder_path, output_jsonl_path, skip_header_line=None):
         """
-        Processes the input file, chunks it, and writes to a JSONL file.
+        Processes all .txt files in a given folder, chunks them, and writes to a single JSONL file.
+        """
+        all_chunks_data = []
+        chunk_id_counter = 0
+
+        logger.info(f"Searching for .txt files in '{input_folder_path}'...")
+        try:
+            txt_files = [f for f in os.listdir(input_folder_path) if f.endswith('.txt') and os.path.isfile(os.path.join(input_folder_path, f))]
+        except FileNotFoundError:
+            logger.error(f"Error: Input directory not found at {input_folder_path}")
+            return
+        
+        logger.info(f"Found {len(txt_files)} .txt files to process.")
+
+        for filename in tqdm(txt_files, desc="Processing files"):
+            file_path = os.path.join(input_folder_path, filename)
+            file_chunks, updated_chunk_id_counter = self._process_single_file(
+                input_file_path=file_path,
+                chunk_id_offset=chunk_id_counter,
+                skip_header_line=skip_header_line
+            )
+            all_chunks_data.extend(file_chunks)
+            chunk_id_counter = updated_chunk_id_counter
+
+        # Write to JSONL file
+        try:
+            with open(output_jsonl_path, 'w', encoding='utf-8') as outfile:
+                for entry in tqdm(all_chunks_data, desc="Writing chunks to JSONL"):
+                    json.dump(entry, outfile, ensure_ascii=False)
+                    outfile.write('\n')
+            logger.info(f"Successfully processed and wrote {len(all_chunks_data)} chunks from {len(txt_files)} file(s) to {output_jsonl_path}")
+        except IOError:
+            logger.error(f"Error: Could not write to output file {output_jsonl_path}")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during writing: {e}")
+
+    def _process_single_file(self, input_file_path, chunk_id_offset=0, skip_header_line=None):
+        """
+        Processes a single input file, chunks it, and returns chunk data.
         """
         all_chunks_data = []
         current_chunk_text_parts = []
         current_chunk_token_count = 0
-        chunk_id_counter = 0
+        chunk_id_counter = chunk_id_offset
 
         logger.info(f"Starting processing for {input_file_path}...")
 
         semantic_unit_generator = self.stream_semantic_units(input_file_path, skip_header_line)
 
-        for i, sentence in enumerate(tqdm(semantic_unit_generator, desc="Processing sentences")):
+        for i, sentence in enumerate(tqdm(semantic_unit_generator, desc=f"Processing sentences for {os.path.basename(input_file_path)}")):
             if not sentence:
                 continue
 
@@ -212,34 +251,24 @@ class Processor:
                 "token_count_estimate": current_chunk_token_count
             }
             all_chunks_data.append(json_object)
-
-        # Write to JSONL file
-        try:
-            with open(output_jsonl_path, 'w', encoding='utf-8') as outfile:
-                for entry in tqdm(all_chunks_data, desc="Writing chunks to JSONL"):
-                    json.dump(entry, outfile, ensure_ascii=False)
-                    outfile.write('\n')
-            logger.info(f"Successfully processed and wrote {len(all_chunks_data)} chunks to {output_jsonl_path}")
-        except IOError:
-            logger.error(f"Error: Could not write to output file {output_jsonl_path}")
-        except Exception as e:
-            logger.error(f"An unexpected error occurred during writing: {e}")
+        
+        return all_chunks_data, chunk_id_counter
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Process text data into JSONL format with adaptive chunking.")
-    parser.add_argument('--input-file', type=str, default=INPUT_FILE_PATH, help='Path to the input text file.')
+    parser = argparse.ArgumentParser(description="Process text data from a folder into a single JSONL file with adaptive chunking.")
+    parser.add_argument('--input-dir', type=str, default=INPUT_FOLDER_PATH, help='Path to the folder containing input .txt files.')
     parser.add_argument('--output-file', type=str, default=OUTPUT_JSONL_PATH, help='Path to the output JSONL file.')
     parser.add_argument('--max-tokens', type=int, default=MAX_TOKENS_PER_CHUNK, help='Maximum tokens per chunk.')
     parser.add_argument('--skip-header', type=str, default=FIRST_LINE_TO_SKIP, help='First line to skip in the input file.')
     
     args = parser.parse_args()
     
-    logger.info(f"Input file: {args.input_file}")
+    logger.info(f"Input folder: {args.input_dir}")
     logger.info(f"Output JSONL file: {args.output_file}")
     logger.info(f"Max tokens per chunk: {args.max_tokens}")
     logger.info(f"Skipping header line: {args.skip_header}")
 
-    processor = Processor("aubmindlab/bert-base-arabertv02", MAX_TOKENS_PER_CHUNK)
+    processor = Processor("aubmindlab/bert-base-arabertv02", args.max_tokens)
     
-    processor.process_file(args.input_file, args.output_file, args.skip_header)
+    processor.process_folder(args.input_dir, args.output_file, args.skip_header)
