@@ -137,8 +137,8 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
         logger.error(f"Underlying error: {e.__cause__}")
         return []
     except openai.RateLimitError as e:
-        logger.error(f"Groq API request exceeded rate limit: {e}")
-        return []
+        logger.error(f"Groq API request exceeded rate limit. Raising error to stop process.")
+        raise e # Re-raise to be handled by the caller
     except openai.APIStatusError as e:
         logger.error(f"Groq API returned an error status code: {e.status_code}")
         logger.error(f"Response: {e.response}")
@@ -155,9 +155,29 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
     """
     Reads data from input_file_path, generates synthetic Q&A pairs,
     and writes them to output_file_path in an instruction-following format.
+    The process is resumable and will skip already processed chunks.
     """
     logger.info(f"Starting synthetic data generation from '{input_file_path}'...")
+    
+    processed_chunk_ids = set()
+    if os.path.exists(output_file_path):
+        logger.info(f"Output file '{output_file_path}' found. Resuming from last point.")
+        try:
+            with open(output_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        entry = json.loads(line)
+                        if 'source_document_info' in entry and 'original_chunk_id' in entry['source_document_info']:
+                            processed_chunk_ids.add(entry['source_document_info']['original_chunk_id'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Could not parse line in existing output file: {line.strip()}")
+            logger.info(f"Loaded {len(processed_chunk_ids)} previously processed chunk IDs.")
+        except Exception as e:
+            logger.error(f"Could not read existing output file '{output_file_path}': {e}. Starting from scratch.")
+            processed_chunk_ids = set()
+
     count_processed_lines = 0
+    count_skipped_lines = 0
     count_generated_qa_pairs = 0
     request_count = 0 # Added for rate limiting
     request_window_start_time = time.time() # Added for rate limiting
@@ -166,10 +186,16 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
     os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
 
     with open(input_file_path, 'r', encoding='utf-8') as infile, \
-         open(output_file_path, 'w', encoding='utf-8') as outfile:
+         open(output_file_path, 'a', encoding='utf-8') as outfile:
         for line_number, line in enumerate(infile, 1):
             try:
                 data_entry = json.loads(line)
+
+                chunk_id = data_entry.get("chunk_id")
+                if chunk_id and chunk_id in processed_chunk_ids:
+                    count_skipped_lines += 1
+                    continue
+
                 original_text = data_entry.get("text")
 
                 if not original_text:
@@ -191,12 +217,17 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
                         request_window_start_time = current_time
 
                 # Generate Q&A pairs using the Groq LLM function
-                qa_pairs = generate_qa_from_text_with_llm(
-                    text_content=original_text,
-                    num_qa_pairs=qa_per_chunk,
-                    api_key=api_key, # Pass the API key
-                    llm_model=llm_model # Pass the llm_model
-                )
+                try:
+                    qa_pairs = generate_qa_from_text_with_llm(
+                        text_content=original_text,
+                        num_qa_pairs=qa_per_chunk,
+                        api_key=api_key, # Pass the API key
+                        llm_model=llm_model # Pass the llm_model
+                    )
+                except openai.RateLimitError:
+                    logger.error("API rate limit error received. Stopping generation. Progress has been saved.")
+                    break # Exit the loop and proceed to final summary
+
                 request_count += 1 # Increment request counter after successful call or attempt
 
                 if not qa_pairs:
@@ -224,17 +255,18 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
                     count_generated_qa_pairs += 1
                 
                 count_processed_lines += 1
-                if count_processed_lines % 50 == 0: # Log progress every 50 source lines
-                    logger.info(f"Processed {count_processed_lines} lines from input, generated {count_generated_qa_pairs} Q&A pairs so far...")
+                if count_processed_lines > 0 and count_processed_lines % 50 == 0: # Log progress every 50 new lines
+                    logger.info(f"Processed {count_processed_lines} new lines, skipped {count_skipped_lines} lines. Generated {count_generated_qa_pairs} Q&A pairs this session...")
 
             except json.JSONDecodeError:
                 logger.warning(f"Warning: Skipping line {line_number} due to JSON decode error: {line.strip()}")
             except Exception as e:
                 logger.error(f"Error processing line {line_number}: {line.strip()}. Error: {e}")
 
-    logger.info("Synthetic data generation complete.")
-    logger.info(f"Processed {count_processed_lines} lines from the input file.")
-    logger.info(f"Generated a total of {count_generated_qa_pairs} Q&A pairs.")
+    logger.info("Synthetic data generation complete or stopped.")
+    logger.info(f"Processed {count_processed_lines} new lines from the input file.")
+    logger.info(f"Skipped {count_skipped_lines} already processed lines.")
+    logger.info(f"Generated a total of {count_generated_qa_pairs} new Q&A pairs this session.")
     logger.info(f"Output written to '{output_file_path}'")
 
 
