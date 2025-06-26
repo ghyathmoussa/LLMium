@@ -59,41 +59,61 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
         logger.debug(f"length of prompt_text: {len(prompt_text)}")
 
         try:
-            qa_pairs = json.loads(response_content)
+            # Clean up the response to handle common LLM formatting issues like
+            # markdown code blocks and trailing commas, which invalidate JSON.
+            cleaned_response = response_content.strip()
+            if cleaned_response.startswith("```json"):
+                cleaned_response = cleaned_response[7:].strip()
+            if cleaned_response.startswith("```"):
+                cleaned_response = cleaned_response[3:].strip()
+            if cleaned_response.endswith("```"):
+                cleaned_response = cleaned_response[:-3].strip()
+
+            # Remove trailing commas before closing brackets/braces
+            cleaned_response = re.sub(r',\s*([\]}])', r'\1', cleaned_response)
+            
+            qa_pairs = json.loads(cleaned_response)
+            
+            # Standardize keys from Arabic ("سؤال", "الإجابة") to English
+            if qa_pairs and isinstance(qa_pairs, list):
+                converted_pairs = []
+                for pair in qa_pairs:
+                    if isinstance(pair, dict):
+                        question = pair.get("question") or pair.get("سؤال")
+                        answer = pair.get("answer") or pair.get("الإجابة")
+                        if question and answer:
+                            converted_pairs.append({"question": question, "answer": answer})
+                        else:
+                            logger.warning(f"Skipping malformed Q&A pair after key conversion: {pair}")
+                qa_pairs = converted_pairs
+
             if not isinstance(qa_pairs, list): # Ensure it's a list
-                 logger.warning(f"Warning: LLM response was not a list of Q&A pairs. Response: {response_content}")
+                 logger.warning(f"Warning: LLM response was not a list of Q&A pairs. Response: {cleaned_response}")
                  return []
             return qa_pairs
         except json.JSONDecodeError:
-            logger.error(f"Error: Could not decode LLM response as JSON. Response: {response_content}")
+            logger.error(f"Error: Could not decode LLM response as JSON even after cleaning. Cleaned Response: {cleaned_response}")
             # Attempt to extract Q&A pairs using a fallback mechanism if JSON parsing fails
             qa_list = []
             try:
-                # Example regex: Assumes "Q: ... A: ..." or "Question: ... Answer: ..."
-                # This regex needs to be robust and tested with actual LLM failure outputs.
-                # It looks for "question:" followed by any characters (non-greedy) until "answer:",
-                # then captures the answer. This is a simplified example.
-                # Attempt to find structured Q&A pairs even if not perfect JSON
-                # This regex looks for "question:" and "answer:" allowing for variations in casing and spacing.
-                # It captures the text after "question:" and "answer:".
-                # It assumes questions and answers might be separated by newlines or other text.
-
-                # Split by "question:" or "سؤال:" (case-insensitive)
-                potential_qa_blocks = re.split(r'(?:question|سؤال):', response_content, flags=re.IGNORECASE)
+                # This regex is improved to handle quasi-JSON responses.
+                # It looks for quoted keys and captures the values.
+                # Split by "question:" or "سؤال:" (case-insensitive) - improved to handle quotes and spaces
+                potential_qa_blocks = re.split(r'["\']?(?:question|سؤال)["\']?\s*:', response_content, flags=re.IGNORECASE)
                 
                 for block in potential_qa_blocks:
                     if not block.strip():
                         continue
 
-                    # Try to find "answer:" or "إجابة:" within the block
-                    match = re.search(r'(.*?)(?:answer|إجابة):\s*(.*)', block, flags=re.IGNORECASE | re.DOTALL)
+                    # Try to find "answer:" or "إجابة:" within the block - improved to handle quotes and spaces
+                    match = re.search(r'(.*?)(?:["\']?(?:answer|إجابة)["\']?\s*:)\s*"(.*?)"', block, flags=re.IGNORECASE | re.DOTALL)
                     if match:
                         question_text = match.group(1).strip()
                         answer_text = match.group(2).strip()
                         
                         # Basic cleaning: remove potential leading/trailing quotes or list markers if model adds them
-                        question_text = re.sub(r'^["\'\d.\s-]*|["\'\s]*$', '', question_text)
-                        answer_text = re.sub(r'^["\'\d.\s-]*|["\'\s]*$', '', answer_text)
+                        question_text = re.sub(r'^["\']?|["\']?,?$', '', question_text).strip()
+
 
                         if question_text and answer_text:
                             qa_list.append({"question": question_text, "answer": answer_text})
