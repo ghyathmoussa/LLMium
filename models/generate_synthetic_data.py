@@ -2,9 +2,9 @@ import json
 import os
 import argparse
 import openai # Added for Groq
+import httpx # Import httpx for timeouts
 import time # Added for rate limiting
 from helpers.get_prompt import get_prompt
-from config import API_KEY # Assuming you have a config.py with API_KEY defined, consider renaming for Groq
 from utils.logger import setup_app_logger
 import re
 
@@ -29,20 +29,21 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
         return []
 
     if not api_key:
-        api_key = os.environ.get("API_KEY") # Changed from OPENROUTER_API_KEY
+        api_key = os.environ.get("GROQ_API_KEY") # Use GROQ_API_KEY for consistency
         if not api_key:
-            logger.error("Error: Groq API key not provided. Set GROQ_API_KEY environment variable or use --llm-api-key.")
+            logger.error("Error: Groq API key not provided. Set GROQ_API_KEY environment variable or use the --llm-api-key argument.")
             return []
 
-    client = openai.OpenAI(
-        base_url="https://api.groq.com/openai/v1", # Changed to Groq endpoint
-        api_key=api_key,
-    )
-    prompt_text = get_prompt(language='arabic', num_qa_pairs=num_qa_pairs, text_content=text_content)
-
-    logger.debug(f"DEBUG: Calling Groq with model {llm_model} for text starting with: {text_content[:100]}...")
-
     try:
+        client = openai.OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=api_key,
+            timeout=httpx.Timeout(60.0, connect=10.0), # Added connect and read timeouts
+        )
+        prompt_text = get_prompt(language='arabic', num_qa_pairs=num_qa_pairs, text_content=text_content)
+
+        logger.debug(f"DEBUG: Calling Groq with model {llm_model} for text starting with: {text_content[:100]}...")
+
         completion = client.chat.completions.create(
             model=llm_model,
             messages=[
@@ -111,8 +112,19 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
                 logger.error(f"Error during fallback Q&A extraction: {e_fallback}")
                 return []
 
+    except openai.APIConnectionError as e:
+        logger.error("Groq API connection error: The server could not be reached.")
+        logger.error(f"Underlying error: {e.__cause__}")
+        return []
+    except openai.RateLimitError as e:
+        logger.error(f"Groq API request exceeded rate limit: {e}")
+        return []
+    except openai.APIStatusError as e:
+        logger.error(f"Groq API returned an error status code: {e.status_code}")
+        logger.error(f"Response: {e.response}")
+        return []
     except openai.APIError as e:
-        logger.error(f"Groq API error: {e}") # Changed from OpenRouter
+        logger.error(f"Groq API error: {e}")
         return []
     except Exception as e:
         logger.error(f"An unexpected error occurred during LLM call: {e}")
@@ -208,22 +220,26 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
 
 if __name__ == "__main__":
     # --- Configuration ---
-    # It's good practice to define paths at the top or get them from arguments/env vars
-    INPUT_FILE_PATH = os.path.join('data', 'processed_data.jsonl')
-    OUTPUT_FILE_PATH = os.path.join('data', 'synthetic_finetuning_data.jsonl')
-    # Number of Q&A pairs to try and generate per text chunk
-    # Adjust this based on your needs and LLM capabilities
-    QA_PAIRS_PER_CHUNK = 3
     # Default Groq model (example)
     DEFAULT_LLM_MODEL = "llama3-8b-8192" # You can change this
+    QA_PAIRS_PER_CHUNK = 3
     
     parser = argparse.ArgumentParser(description="Generate synthetic Q&A data for fine-tuning.")
-    parser.add_argument("--input-file", type=str, required=True, default=INPUT_FILE_PATH, help="Path to the input JSONL file.")
-    parser.add_argument("--output-file", type=str, required=True, default=OUTPUT_FILE_PATH, help="Path to the output JSONL file.")
+    parser.add_argument("--input-file", type=str, required=True, help="Path to the input JSONL file.")
+    parser.add_argument("--output-file", type=str, required=True, help="Path to the output JSONL file.")
     parser.add_argument("--qa-per-chunk", type=int, default=QA_PAIRS_PER_CHUNK, help="Number of Q&A pairs to generate per text chunk.")
-    parser.add_argument("--llm-api-key", type=str, default=API_KEY, help="API key for the Groq service. If not provided, tries to use API_KEY env var.") # Changed argument
-    parser.add_argument("--llm-model", type=str, help=f"The LLM model to use via Groq (default: {DEFAULT_LLM_MODEL}).") # Changed description
+    parser.add_argument("--llm-api-key", type=str, default=None, help="API key for the Groq service. If not provided, uses GROQ_API_KEY env var.")
+    parser.add_argument("--llm-model", type=str, default=DEFAULT_LLM_MODEL, help=f"The LLM model to use via Groq (default: {DEFAULT_LLM_MODEL}).")
 
     args = parser.parse_args()
+
+    # Determine API key: use command-line arg if provided, otherwise it will be picked up from env var in the function.
+    api_key_to_use = args.llm_api_key or os.environ.get("GROQ_API_KEY")
     
-    create_synthetic_data(args.input_file, args.output_file, args.qa_per_chunk, api_key=args.llm_api_key, llm_model=args.llm_model) # Changed to use args.groq_api_key
+    create_synthetic_data(
+        args.input_file, 
+        args.output_file, 
+        args.qa_per_chunk, 
+        api_key=api_key_to_use,
+        llm_model=args.llm_model
+    )
