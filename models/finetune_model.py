@@ -44,6 +44,7 @@ args.add_argument("--padding-side", type=str, default="right")
 args.add_argument("--beta", type=float, default=0.04) 
 args.add_argument("--num-generations", type=int, default=4)
 args.add_argument("--max-completion-length", type=int, default=128)
+args.add_argument("--token", type=str, default=None, help="Hugging Face token for gated models")
 
 args = args.parse_args()
 
@@ -51,6 +52,7 @@ args = args.parse_args()
 MODEL_NAME = args.model_name
 OUTPUT_DIR = args.output_dir
 DATASET_NAME = args.dataset_name
+HF_TOKEN = args.token
 
 # Training parameters
 BATCH_SIZE = args.batch_size
@@ -101,6 +103,7 @@ class ReasoningModel:
             beta: float,
             num_generations: int,
             max_completion_length: int,
+            token: str,
     ):
         self.model_name = model_name
         self.output_dir = output_dir
@@ -118,6 +121,7 @@ class ReasoningModel:
         self.num_generations = num_generations
         self.max_completion_length = max_completion_length
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.token = token
 
     def _load_from_json(self, dataset_name: str):
         try:
@@ -133,7 +137,7 @@ class ReasoningModel:
         return data
     
     def _load_tokenizer(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        tokenizer = AutoTokenizer.from_pretrained(self.model_name, token=self.token)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token # Ensure pad token is set
         tokenizer.padding_side = self.padding_side 
@@ -207,7 +211,8 @@ class ReasoningModel:
             self.model_name,
             quantization_config=bnb_config,
             device_map=self.device,
-            trust_remote_code=True
+            trust_remote_code=True,
+            token=self.token
         )
 
         # Apply LoRA configuration for PEFT
@@ -255,10 +260,11 @@ class ReasoningModel:
 
 
 class EvaluateModel:
-    def __init__(self, model_name: str, output_dir: str = None): # Added output_dir for PEFT model
+    def __init__(self, model_name: str, output_dir: str = None, token: str = None): # Added output_dir for PEFT model
         self.model_name = model_name
         self.output_dir = output_dir
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.token = token
         # self.padding_side = "right" # Defined in tokenizer loading
 
     def _load_tokenizer(self):
@@ -266,9 +272,9 @@ class EvaluateModel:
         # If output_dir is provided, assume it's a PEFT model, load base tokenizer
         # Otherwise, load from model_name (could be a fully merged model)
         try:
-            tokenizer = AutoTokenizer.from_pretrained(self.model_name) # Try base model first
+            tokenizer = AutoTokenizer.from_pretrained(self.model_name, token=self.token) # Try base model first
         except Exception:
-            tokenizer = AutoTokenizer.from_pretrained(self.output_dir) # Fallback to output_dir if base fails
+            tokenizer = AutoTokenizer.from_pretrained(self.output_dir, token=self.token) # Fallback to output_dir if base fails
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -289,6 +295,7 @@ class EvaluateModel:
                 device_map=self.device,
                 trust_remote_code=True,
                 torch_dtype=torch.float16, # Ensure consistent dtype
+                token=self.token,
             )
             model_to_eval = PeftModel.from_pretrained(base_model, self.output_dir)
             model_to_eval.eval() # Set to evaluation mode
@@ -298,6 +305,7 @@ class EvaluateModel:
                 device_map=self.device,
                 trust_remote_code=True,
                 torch_dtype=torch.float16,
+                token=self.token,
             )
             model_to_eval.eval()
 
@@ -370,7 +378,8 @@ if __name__ == "__main__":
         ft_type=FT_TYPE, 
         beta=BETA, 
         num_generations=NUM_GENERATIONS, 
-        max_completion_length=MAX_COMPLETION_LENGTH 
+        max_completion_length=MAX_COMPLETION_LENGTH,
+        token=HF_TOKEN,
     )
 
     reasoning_model.train()
@@ -380,7 +389,7 @@ if __name__ == "__main__":
     print("\nStarting evaluation...")
     # Assuming the fine-tuned model is saved in OUTPUT_DIR and has PEFT adapters
     # If you fully merged and saved, model_name for EvaluateModel would be OUTPUT_DIR and output_dir=None
-    eval_model = EvaluateModel(model_name=MODEL_NAME, output_dir=OUTPUT_DIR) 
+    eval_model = EvaluateModel(model_name=MODEL_NAME, output_dir=OUTPUT_DIR, token=HF_TOKEN) 
     
     test_math_prompt = "Solve for x: 2x + 5 = 11"
     print(f"Evaluating with prompt: {test_math_prompt}")
