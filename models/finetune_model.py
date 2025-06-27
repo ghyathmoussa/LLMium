@@ -24,7 +24,7 @@ SYSTEM_PROMPT = (
     "process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., "
     "<think> reasoning process here </think><answer> answer here </answer>"
 )
-
+logger = setup_app_logger()
 # Provide the path to the dataset and the model name
 args = argparse.ArgumentParser()
 
@@ -135,10 +135,10 @@ class ReasoningModel:
             with open(dataset_name, "r") as f:
                 data = json.load(f)
         except FileNotFoundError:
-            print(f"Error: Dataset file {dataset_name} not found. Please create a dummy JSON file for testing.")
+            logger.error(f"Error: Dataset file {dataset_name} not found. Please create a dummy JSON file for testing.")
             return None
         except json.JSONDecodeError:
-            print(f"Error: Dataset file {dataset_name} is not a valid JSON.")
+            logger.error(f"Error: Dataset file {dataset_name} is not a valid JSON.")
             return None
             
         return data
@@ -182,16 +182,16 @@ class ReasoningModel:
 
         processed_dataset = []
         if not isinstance(raw_dataset, list):
-            print(f"Warning: Expected a list from _load_from_json, but got {type(raw_dataset)}. Check your JSON structure.")
+            logger.warning(f"Warning: Expected a list from _load_from_json, but got {type(raw_dataset)}. Check your JSON structure.")
             return [{"prompt": [{"role":"system", "content":SYSTEM_PROMPT}, {"role":"user", "content":"Error loading data."}], "solution": "Error"}]
 
         for item in raw_dataset:
             if not isinstance(item, dict):
-                print(f"Warning: Skipping item, expected dict but got {type(item)}: {item}")
+                logger.warning(f"Warning: Skipping item, expected dict but got {type(item)}: {item}")
                 continue
             
             if "problem" not in item or "solution" not in item: # Ensure your JSON has these keys
-                print(f"Warning: Skipping item due to missing 'problem' or 'solution': {item}")
+                logger.warning(f"Warning: Skipping item due to missing 'problem' or 'solution': {item}")
                 continue
 
             prompt_messages = [
@@ -248,7 +248,7 @@ class ReasoningModel:
             train_data = self.load_dataset(self.dataset_name)
 
             if not train_data:
-                print("Error: Training data is empty. Aborting training.")
+                logger.error("Error: Training data is empty. Aborting training.")
                 return
 
             reward_fns = [format_reward_func, accuracy_reward_func]
@@ -344,13 +344,13 @@ class EvaluateModel:
         try:
             final_prompt_str = tokenizer.apply_chat_template(eval_prompt_messages, tokenize=False, add_generation_prompt=True)
         except Exception as e:
-            print(f"Could not apply chat template: {e}. Using simple concatenation.")
+            logger.error(f"Could not apply chat template: {e}. Using simple concatenation.")
             final_prompt_str = SYSTEM_PROMPT + "\nUser: " + test_prompt_text + "\nAssistant:"
 
 
         inputs = tokenizer(final_prompt_str, return_tensors="pt").to(self.device)
         
-        print(f"Generating response for: {final_prompt_str}")
+        logger.info(f"Generating response for: {final_prompt_str}")
 
         with torch.no_grad(): # Ensure no gradients are computed during generation
             outputs = model_to_eval.generate(
@@ -363,9 +363,9 @@ class EvaluateModel:
             )
 
         decoded_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        print("--- Model Output ---")
-        print(decoded_output)
-        print("--------------------")
+        logger.info("--- Model Output ---")
+        logger.info(decoded_output)
+        logger.info("--------------------")
         # To get only the generated part:
         # generated_part = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
         # print("--- Generated Part Only ---")
@@ -374,8 +374,8 @@ class EvaluateModel:
 
 
 if __name__ == "__main__":
-    print(f"Starting fine-tuning with type: {FT_TYPE}")
-    print(f"Model: {MODEL_NAME}, Dataset: {DATASET_NAME}, Output: {OUTPUT_DIR}")
+    logger.info(f"Starting fine-tuning with type: {FT_TYPE}")
+    logger.info(f"Model: {MODEL_NAME}, Dataset: {DATASET_NAME}, Output: {OUTPUT_DIR}")
 
     reasoning_model = ReasoningModel(
         model_name=MODEL_NAME,
@@ -397,18 +397,18 @@ if __name__ == "__main__":
     )
 
     reasoning_model.train()
-    print(f"Training finished. Model saved to {OUTPUT_DIR}")
+    logger.info(f"Training finished. Model saved to {OUTPUT_DIR}")
 
     # Example of evaluation after training
-    print("\nStarting evaluation...")
+    logger.info("\nStarting evaluation...")
     # Assuming the fine-tuned model is saved in OUTPUT_DIR and has PEFT adapters
     # If you fully merged and saved, model_name for EvaluateModel would be OUTPUT_DIR and output_dir=None
     eval_model = EvaluateModel(model_name=MODEL_NAME, output_dir=OUTPUT_DIR, token=HF_TOKEN) 
     
     test_math_prompt = "Solve for x: 2x + 5 = 11"
-    print(f"Evaluating with prompt: {test_math_prompt}")
+    logger.info(f"Evaluating with prompt: {test_math_prompt}")
     eval_model.evaluate(test_prompt_text=test_math_prompt)
 
     test_reasoning_prompt = "If a train travels at 60 mph for 2 hours, and then at 40 mph for 1 hour, what is the total distance traveled?"
-    print(f"Evaluating with prompt: {test_reasoning_prompt}")
+    logger.info(f"Evaluating with prompt: {test_reasoning_prompt}")
     eval_model.evaluate(test_prompt_text=test_reasoning_prompt)
