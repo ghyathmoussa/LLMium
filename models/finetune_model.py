@@ -24,7 +24,7 @@ SYSTEM_PROMPT = (
     "process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., "
     "<think> reasoning process here </think><answer> answer here </answer>"
 )
-logger = setup_app_logger()
+logger = setup_app_logger(__name__)
 # Provide the path to the dataset and the model name
 args = argparse.ArgumentParser()
 
