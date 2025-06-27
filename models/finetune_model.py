@@ -123,6 +123,13 @@ class ReasoningModel:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.token = token
 
+        if "llama" in self.model_name.lower() and not self.token:
+            raise ValueError(
+                "The model you're trying to use appears to be a Llama model, which requires "
+                "a Hugging Face authentication token. Please provide your token using the "
+                "--token argument when running the script."
+            )
+
     def _load_from_json(self, dataset_name: str):
         try:
             with open(dataset_name, "r") as f:
@@ -266,6 +273,13 @@ class EvaluateModel:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.token = token
         # self.padding_side = "right" # Defined in tokenizer loading
+
+        if "llama" in self.model_name.lower() and not self.token:
+            raise ValueError(
+                "The model you're trying to use appears to be a Llama model, which requires "
+                "a Hugging Face authentication token. Please provide your token using the "
+                "--token argument when running the script."
+            )
 
     def _load_tokenizer(self):
         # If evaluating a PEFT model, tokenizer should be from base model
