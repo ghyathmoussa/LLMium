@@ -12,3 +12,6 @@ peft
 python-dotenv
 pytest
 loguru
+bitsandbytes
+einops
+scipy
