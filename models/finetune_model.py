@@ -3,7 +3,11 @@
 # Email:gheathmousa@gmail.com
 
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 import json
+import os
 from torch.utils.data import Dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, PeftModel
 from transformers import (
@@ -45,6 +49,12 @@ args.add_argument("--beta", type=float, default=0.04)
 args.add_argument("--num-generations", type=int, default=4)
 args.add_argument("--max-completion-length", type=int, default=128)
 args.add_argument("--token", type=str, default=None, help="Hugging Face token for gated models")
+args.add_argument("--distributed", action="store_true", help="Enable distributed training")
+args.add_argument("--world-size", type=int, default=1, help="Number of processes for distributed training")
+args.add_argument("--rank", type=int, default=0, help="Rank of the current process")
+args.add_argument("--local-rank", type=int, default=0, help="Local rank of the current process")
+args.add_argument("--master-addr", type=str, default="localhost", help="Master node address for distributed training")
+args.add_argument("--master-port", type=str, default="12355", help="Master node port for distributed training")
 
 args = args.parse_args()
 
@@ -64,6 +74,33 @@ FT_TYPE = args.ft_type
 BETA = args.beta
 NUM_GENERATIONS = args.num_generations
 MAX_COMPLETION_LENGTH = args.max_completion_length
+
+# Distributed training parameters
+DISTRIBUTED = args.distributed
+WORLD_SIZE = args.world_size
+RANK = args.rank
+LOCAL_RANK = args.local_rank
+MASTER_ADDR = args.master_addr
+MASTER_PORT = args.master_port
+
+
+def setup_distributed_training(rank, world_size, master_addr, master_port):
+    """Initialize distributed training environment"""
+    os.environ['MASTER_ADDR'] = master_addr
+    os.environ['MASTER_PORT'] = master_port
+    
+    # Initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    
+    # Set the device for this process
+    torch.cuda.set_device(rank)
+
+
+def cleanup_distributed_training():
+    """Clean up distributed training environment"""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
 
 # Define the dataset class
 class ReasoningDataset(Dataset):
@@ -104,6 +141,10 @@ class ReasoningModel:
             num_generations: int,
             max_completion_length: int,
             token: str,
+            distributed: bool = False,
+            world_size: int = 1,
+            rank: int = 0,
+            local_rank: int = 0,
     ):
         self.model_name = model_name
         self.output_dir = output_dir
@@ -120,7 +161,17 @@ class ReasoningModel:
         self.beta = beta
         self.num_generations = num_generations
         self.max_completion_length = max_completion_length
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.distributed = distributed
+        self.world_size = world_size
+        self.rank = rank
+        self.local_rank = local_rank
+        
+        # Set device based on distributed training configuration
+        if self.distributed:
+            self.device = torch.device(f"cuda:{self.local_rank}" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
         self.token = token
 
         if "llama" in self.model_name.lower() and not self.token:
@@ -173,7 +224,10 @@ class ReasoningModel:
             beta=self.beta,
             loss_type="bnpo",
             log_completions=True, # Enable for debugging
-            num_completions_to_print=2 # Print 2 completions per log step
+            num_completions_to_print=2, # Print 2 completions per log step
+            # Distributed training configurations
+            local_rank=self.local_rank if self.distributed else -1,
+            ddp_find_unused_parameters=False if self.distributed else None,
         )
         return grpo_args
     
@@ -214,10 +268,17 @@ class ReasoningModel:
                 bnb_4bit_compute_dtype=torch.float16
             )
         
+        # Configure device mapping for distributed training
+        if self.distributed:
+            # For distributed training, use device_map="auto" or specific GPU assignment
+            device_map = {"": self.local_rank}
+        else:
+            device_map = self.device
+        
         model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
             quantization_config=bnb_config,
-            device_map=self.device,
+            device_map=device_map,
             trust_remote_code=True,
             token=self.token
         )
@@ -373,42 +434,66 @@ class EvaluateModel:
         # print("-------------------------")
 
 
-if __name__ == "__main__":
-    logger.info(f"Starting fine-tuning with type: {FT_TYPE}")
-    logger.info(f"Model: {MODEL_NAME}, Dataset: {DATASET_NAME}, Output: {OUTPUT_DIR}")
-
-    reasoning_model = ReasoningModel(
-        model_name=MODEL_NAME,
-        output_dir=OUTPUT_DIR,
-        dataset_name=DATASET_NAME,
-        batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
-        learning_rate=LEARNING_RATE,
-        num_train_epochs=NUM_TRAIN_EPOCHS,
-        max_steps=MAX_STEPS,
-        use_quantization=args.use_quantization,
-        max_length=args.max_length,
-        padding_side=args.padding_side,
-        ft_type=FT_TYPE, 
-        beta=BETA, 
-        num_generations=NUM_GENERATIONS, 
-        max_completion_length=MAX_COMPLETION_LENGTH,
-        token=HF_TOKEN,
-    )
-
-    reasoning_model.train()
-    logger.info(f"Training finished. Model saved to {OUTPUT_DIR}")
-
-    # Example of evaluation after training
-    logger.info("\nStarting evaluation...")
-    # Assuming the fine-tuned model is saved in OUTPUT_DIR and has PEFT adapters
-    # If you fully merged and saved, model_name for EvaluateModel would be OUTPUT_DIR and output_dir=None
-    eval_model = EvaluateModel(model_name=MODEL_NAME, output_dir=OUTPUT_DIR, token=HF_TOKEN) 
+def main():
+    """Main training function that can be called by distributed processes"""
+    # Setup distributed training if enabled
+    if DISTRIBUTED:
+        setup_distributed_training(RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT)
     
-    test_math_prompt = "Solve for x: 2x + 5 = 11"
-    logger.info(f"Evaluating with prompt: {test_math_prompt}")
-    eval_model.evaluate(test_prompt_text=test_math_prompt)
+    try:
+        if not DISTRIBUTED or RANK == 0:  # Only log on main process
+            logger.info(f"Starting fine-tuning with type: {FT_TYPE}")
+            logger.info(f"Model: {MODEL_NAME}, Dataset: {DATASET_NAME}, Output: {OUTPUT_DIR}")
+            if DISTRIBUTED:
+                logger.info(f"Distributed training enabled with {WORLD_SIZE} processes")
 
-    test_reasoning_prompt = "If a train travels at 60 mph for 2 hours, and then at 40 mph for 1 hour, what is the total distance traveled?"
-    logger.info(f"Evaluating with prompt: {test_reasoning_prompt}")
-    eval_model.evaluate(test_prompt_text=test_reasoning_prompt)
+        reasoning_model = ReasoningModel(
+            model_name=MODEL_NAME,
+            output_dir=OUTPUT_DIR,
+            dataset_name=DATASET_NAME,
+            batch_size=BATCH_SIZE,
+            gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+            learning_rate=LEARNING_RATE,
+            num_train_epochs=NUM_TRAIN_EPOCHS,
+            max_steps=MAX_STEPS,
+            use_quantization=args.use_quantization,
+            max_length=args.max_length,
+            padding_side=args.padding_side,
+            ft_type=FT_TYPE, 
+            beta=BETA, 
+            num_generations=NUM_GENERATIONS, 
+            max_completion_length=MAX_COMPLETION_LENGTH,
+            token=HF_TOKEN,
+            distributed=DISTRIBUTED,
+            world_size=WORLD_SIZE,
+            rank=RANK,
+            local_rank=LOCAL_RANK,
+        )
+
+        reasoning_model.train()
+        
+        if not DISTRIBUTED or RANK == 0:  # Only log and evaluate on main process
+            logger.info(f"Training finished. Model saved to {OUTPUT_DIR}")
+
+            # Example of evaluation after training
+            logger.info("\nStarting evaluation...")
+            # Assuming the fine-tuned model is saved in OUTPUT_DIR and has PEFT adapters
+            # If you fully merged and saved, model_name for EvaluateModel would be OUTPUT_DIR and output_dir=None
+            eval_model = EvaluateModel(model_name=MODEL_NAME, output_dir=OUTPUT_DIR, token=HF_TOKEN) 
+            
+            test_math_prompt = "Solve for x: 2x + 5 = 11"
+            logger.info(f"Evaluating with prompt: {test_math_prompt}")
+            eval_model.evaluate(test_prompt_text=test_math_prompt)
+
+            test_reasoning_prompt = "If a train travels at 60 mph for 2 hours, and then at 40 mph for 1 hour, what is the total distance traveled?"
+            logger.info(f"Evaluating with prompt: {test_reasoning_prompt}")
+            eval_model.evaluate(test_prompt_text=test_reasoning_prompt)
+    
+    finally:
+        # Clean up distributed training
+        if DISTRIBUTED:
+            cleanup_distributed_training()
+
+
+if __name__ == "__main__":
+    main()
