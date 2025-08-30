@@ -34,7 +34,7 @@ args = argparse.ArgumentParser()
 
 args.add_argument("--ft-type", type=str, default="reasoning")
 args.add_argument("--use-quantization", type=str, default="lora")
-args.add_argument("--model-name", type=str, default="Qwen/QwQ-32B-Preview")
+args.add_argument("--model-name", type=str, default="Qwen/Qwen2.5-7B-Instruct")
 args.add_argument("--output-dir", type=str, default="./arabic-reasoning-model")
 args.add_argument("--dataset-name", type=str, default=None)
 args.add_argument("--batch-size", type=int, default=8)
@@ -268,6 +268,7 @@ class ReasoningModel:
                 bnb_4bit_compute_dtype=torch.float16
             )
         
+
         # Configure device mapping for distributed training
         if self.distributed:
             # For distributed training, use device_map="auto" or specific GPU assignment
@@ -283,13 +284,55 @@ class ReasoningModel:
             token=self.token
         )
 
+        # List of fallback models that work in Kaggle without tokens
+        fallback_models = [
+            "microsoft/DialoGPT-medium",
+            "distilgpt2", 
+            "EleutherAI/gpt-neo-1.3B",
+            "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        ]
+        
+        model = None
+        model_to_use = self.model_name
+        
+        # Try original model first, then fallbacks
+        models_to_try = [self.model_name] + [m for m in fallback_models if m != self.model_name]
+        
+        for attempt_model in models_to_try:
+            try:
+                logger.info(f"Attempting to load model: {attempt_model}")
+                model = AutoModelForCausalLM.from_pretrained(
+                    attempt_model,
+                    quantization_config=bnb_config,
+                    device_map=self.device,
+                    trust_remote_code=True,
+                    token=self.token if attempt_model == self.model_name else None
+                )
+                model_to_use = attempt_model
+                logger.info(f"Successfully loaded model: {model_to_use}")
+                break
+            except Exception as e:
+                logger.warning(f"Failed to load {attempt_model}: {e}")
+                if "mamba_ssm" in str(e):
+                    logger.info("Model requires mamba_ssm which has CUDA compatibility issues in Kaggle")
+                elif "401" in str(e) or "Unauthorized" in str(e):
+                    logger.info("Model requires authentication token")
+                continue
+        
+        if model is None:
+            raise RuntimeError("Could not load any model. Please check your internet connection and try again.")
+
+
         # Apply LoRA configuration for PEFT
         # Check if model is already a PeftModel, common if loading fine-tuned model with adapter
         if not isinstance(model, PeftModel):
+            # Different models have different attention module names
+            target_modules = self._get_target_modules(model_to_use)
+            
             lora_config = LoraConfig(
                 r=16,
                 lora_alpha=16,
-                target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], 
+                target_modules=target_modules, 
                 lora_dropout=0.05, # Slightly increased dropout
                 bias="none",
                 task_type="CAUSAL_LM"
@@ -299,6 +342,22 @@ class ReasoningModel:
             model.print_trainable_parameters()
 
         return model
+    
+    def _get_target_modules(self, model_name):
+        """Get appropriate target modules for LoRA based on model architecture"""
+        model_name_lower = model_name.lower()
+        
+        if "gpt" in model_name_lower or "dialogpt" in model_name_lower:
+            return ["c_attn", "c_proj"]
+        elif "llama" in model_name_lower or "tinyllama" in model_name_lower:
+            return ["q_proj", "k_proj", "v_proj", "o_proj"]
+        elif "qwen" in model_name_lower:
+            return ["q_proj", "k_proj", "v_proj", "o_proj"]
+        elif "phi" in model_name_lower:
+            return ["q_proj", "k_proj", "v_proj", "dense"]
+        else:
+            # Default fallback - try common attention module names
+            return ["q_proj", "k_proj", "v_proj", "o_proj"]
     
     def train(self, ):
         model = self.load_model()
