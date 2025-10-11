@@ -1,0 +1,213 @@
+# Project Settings
+project:
+  name: "RL-Training"
+  description: "ML project for RL Training"
+  version: "1.0.0"
+  random_seed: 42
+  output_dir: "./output_models"
+
+# Data Configuration
+data:
+  # Dataset sources
+  dataset_name: "arabic-qa"  # HuggingFace dataset name
+  cache_dir: "./data/cache"
+  
+  # Data paths
+  paths:
+    train: "./data/arabic-qa/train.json"
+    validation: "./data/squad/validation.json"
+    test: "./data/squad/test.json"
+    processed: "./data/processed"
+  
+  # Data splits
+  splits:
+    train: "train"
+    validation: "validation"
+    test: "test"
+  
+  # Data processing
+  preprocessing:
+    max_length: 1024
+    stride: 256
+    lowercase: true
+    remove_special_chars: false
+    batch_size: 100
+  
+  # Data loading
+  loading:
+    num_workers: 4
+    file_format: "json"  # Options: json, parquet, csv
+    shuffle: true
+
+# Model Configuration
+model:
+  name: "meta-llama/Llama-3.1-8B-Instruct"  # Model name or path
+  architecture: "transformer"
+  
+  # Model hyperparameters
+  hyperparameters:
+    hidden_size: 768
+    num_layers: 12
+    num_attention_heads: 12
+    intermediate_size: 3072
+    dropout: 0.1
+    attention_dropout: 0.1
+    max_position_embeddings: 1024
+    max_seq_length: 2048
+    vocab_size: 30522
+    r: 16
+    lora_alpha: 16
+    lora_dropout: 0.05
+  
+  # Pre-trained model settings
+  pretrained:
+    use_pretrained: true
+    model_path: "unsloth/Meta-Llama-3.1-8B-bnb-4bit"
+    freeze_embeddings: false
+    freeze_encoder: false
+    load_in_4bit: true
+
+# Training Configuration
+training:
+  # Training hyperparameters
+  epochs: 10
+  batch_size: 4
+  gradient_accumulation_steps: 2
+  learning_rate: 3.0e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  mini_batch_size: 2
+  max_new_tokens: 512
+  logging_steps: 10
+  save_steps: 100
+  save_total_limit: 2
+  output_dir: "./output_models"
+  seed: 42
+
+  # Optimizer settings
+  optimizer:
+    type: "adamw_8bit"  # Options: Adam, AdamW, SGD, etc.
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+  
+  # Learning rate scheduler
+  scheduler:
+    type: "cosine"  # Options: linear, cosine, polynomial, constant
+    num_warmup_steps: 500
+    num_training_steps: 10000
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 3
+    monitor: "validation_loss"
+    mode: "min"  # Options: min, max
+  
+  # Checkpointing
+  checkpoint:
+    save_dir: "./output_models"
+    save_frequency: 1  # Save every N epochs
+    save_best_only: true
+    monitor: "validation_loss"
+    mode: "min"
+
+# Evaluation Configuration
+evaluation:
+  batch_size: 4
+  metrics:
+    - "accuracy"
+    - "f1"
+    - "precision"
+    - "recall"
+    - "loss"
+  
+  # Evaluation frequency
+  eval_frequency: 1  # Evaluate every N epochs
+  eval_during_training: true
+
+# Inference Configuration
+inference:
+  batch_size: 4
+  max_length: 1024
+  device: "cuda"  # Options: cpu, cuda, mps
+  output_dir: "./output_models"
+
+# Logging Configuration
+logging:
+  level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_dir: "./logs"
+  log_file: "training.log"
+  
+  # Console logging
+  console:
+    enabled: true
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # File logging
+  file:
+    enabled: true
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Tensorboard
+  tensorboard:
+    enabled: true
+    log_dir: "./logs/tensorboard"
+  
+  # Wandb (Weights & Biases)
+  wandb:
+    enabled: false
+    project: "amd-hackathon"
+    entity: null
+    tags:
+      - "transformer"
+      - "nlp"
+
+# Hardware Configuration
+hardware:
+  device: "cuda"  # Options: cpu, cuda, mps (for Apple Silicon)
+  gpu_ids: [0]  # List of GPU IDs to use
+  mixed_precision: true  # Enable mixed precision training (fp16)
+  num_workers: 4
+
+# Paths Configuration
+paths:
+  data_dir: "./data"
+  models_dir: "./output_models"
+  training_dir: "./training"
+  output_dir: "./output_models"
+  logs_dir: "./logs"
+  cache_dir: "./data/cache"
+
+# Experiment Tracking
+experiment:
+  name: "baseline_experiment"
+  description: "Baseline model training"
+  tags:
+    - "baseline"
+    - "v1"
+  
+  # Reproducibility
+  reproducibility:
+    deterministic: true
+    random_seed: 42
+    cudnn_benchmark: false
+
+# Advanced Settings
+advanced:
+  # Gradient checkpointing (saves memory)
+  gradient_checkpointing: true
+  
+  # Model parallelism
+  model_parallel: true
+  
+  # Data parallelism
+  data_parallel: true
+  
+  # Distributed training
+  distributed:
+    enabled: true
+    backend: "nccl"  # Options: nccl, gloo, mpi
+    world_size: 1
+    rank: 0
