@@ -1,8 +1,11 @@
+unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+torch==2.5.0
+xformers==0.0.28.post2
+bitsandbytes==0.43.1
 tqdm
-transformers==4.49.0
+transformers==4.56.2
 tokenizers
 datasets
-torch==2.7.0
 trankit
 openai
 trl
@@ -12,6 +15,6 @@ peft
 python-dotenv
 pytest
 loguru
-bitsandbytes
 einops
 scipy
+sentence-transformers
