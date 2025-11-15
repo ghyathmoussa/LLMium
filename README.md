@@ -39,6 +39,7 @@ This project focuses on Natural Language Processing (NLP) for Arabic text. It ut
     MONGO_DB_NAME=<your_mongodb_database_name>
     MONGO_COLLECTION_NAME=<your_mongodb_collection_name>
     GROQ_API_KEY=<your_groq_api_key>  # Optional: only needed if using Groq API for synthetic data generation
+    MAX_PARALLEL_REQUESTS=5  # Optional: number of parallel requests for synthetic data generation (default: 1)
     ```
 
 ## Usage
@@ -131,7 +132,32 @@ python models/generate_synthetic_data.py \
   --llm-model llama3-8b-8192
 ```
 
-**Note:** When using `--api-url` for vLLM or other custom inference endpoints, no API key is required. The script will automatically detect the custom endpoint and use it instead of the default Groq API.
+**Using Parallel Requests (for faster processing):**
+
+```bash
+# Using command-line argument
+python models/generate_synthetic_data.py \
+  --input-file path/to/dataset.jsonl \
+  --output-file data/synthetic_finetuning_data.jsonl \
+  --qa-per-chunk 3 \
+  --api-url http://localhost:8000/v1 \
+  --llm-model your-model-name \
+  --max-parallel-requests 5
+
+# Or using environment variable
+export MAX_PARALLEL_REQUESTS=5
+python models/generate_synthetic_data.py \
+  --input-file path/to/dataset.jsonl \
+  --output-file data/synthetic_finetuning_data.jsonl \
+  --qa-per-chunk 3 \
+  --api-url http://localhost:8000/v1 \
+  --llm-model your-model-name
+```
+
+**Notes:**
+- When using `--api-url` for vLLM or other custom inference endpoints, no API key is required. The script will automatically detect the custom endpoint and use it instead of the default Groq API.
+- `--max-parallel-requests` controls how many concurrent requests are sent to the API (default: 1 for sequential processing). Higher values speed up processing but may hit rate limits.
+- You can set `MAX_PARALLEL_REQUESTS` environment variable to avoid passing it as an argument every time.
 
 * Preprocess Data (Chunking)
 
@@ -150,6 +176,7 @@ The project configuration is managed in `config.py`. This file loads environment
 *   `MONGO_DB_NAME`: Name of the MongoDB database.
 *   `MONGO_COLLECTION_NAME`: Name of the MongoDB collection.
 *   `GROQ_API_KEY`: (Optional) Groq API key for synthetic data generation. Not required if using vLLM or other custom inference endpoints.
+*   `MAX_PARALLEL_REQUESTS`: (Optional) Number of parallel requests to send to the API for synthetic data generation. Default is 1 (sequential). Higher values improve speed but may hit rate limits.
 
 Ensure these are correctly set in your `.env` file before running the project.
 

@@ -4,9 +4,11 @@ import argparse
 import openai # Added for Groq
 import httpx # Import httpx for timeouts
 import time # Added for rate limiting
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from helpers.get_prompt import get_prompt
 from utils.logger import setup_app_logger
 import re
+import threading
 
 logger = setup_app_logger(__name__)
 
@@ -162,13 +164,41 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
         return []
 
 
-def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_key=None, llm_model=None, api_url=None):
+def process_single_chunk(data_entry, line_number, qa_per_chunk, api_key, llm_model, api_url):
+    """
+    Process a single chunk and generate Q&A pairs.
+    Returns a tuple of (success, qa_pairs, data_entry, line_number, error_message)
+    """
+    try:
+        original_text = data_entry.get("text")
+        if not original_text:
+            return (False, [], data_entry, line_number, "Missing 'text' field")
+        
+        qa_pairs = generate_qa_from_text_with_llm(
+            text_content=original_text,
+            num_qa_pairs=qa_per_chunk,
+            api_key=api_key,
+            llm_model=llm_model,
+            api_url=api_url
+        )
+        return (True, qa_pairs, data_entry, line_number, None)
+    except openai.RateLimitError as e:
+        return (False, [], data_entry, line_number, f"Rate limit error: {e}")
+    except Exception as e:
+        return (False, [], data_entry, line_number, f"Error: {e}")
+
+
+def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_key=None, llm_model=None, api_url=None, max_parallel_requests=1):
     """
     Reads data from input_file_path, generates synthetic Q&A pairs,
     and writes them to output_file_path in an instruction-following format.
     The process is resumable and will skip already processed chunks.
+    
+    Args:
+        max_parallel_requests (int): Number of parallel requests to send. Default is 1 (sequential).
     """
     logger.info(f"Starting synthetic data generation from '{input_file_path}'...")
+    logger.info(f"Max parallel requests: {max_parallel_requests}")
     
     processed_chunk_ids = set()
     if os.path.exists(output_file_path):
@@ -190,90 +220,139 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
     count_processed_lines = 0
     count_skipped_lines = 0
     count_generated_qa_pairs = 0
-    request_count = 0 # Added for rate limiting
-    request_window_start_time = time.time() # Added for rate limiting
-
+    
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
 
-    with open(input_file_path, 'r', encoding='utf-8') as infile, \
-         open(output_file_path, 'a', encoding='utf-8') as outfile:
+    # Prepare chunks to process
+    chunks_to_process = []
+    with open(input_file_path, 'r', encoding='utf-8') as infile:
         for line_number, line in enumerate(infile, 1):
             try:
                 data_entry = json.loads(line)
-
                 chunk_id = data_entry.get("chunk_id")
+                
                 if chunk_id and chunk_id in processed_chunk_ids:
                     count_skipped_lines += 1
                     continue
-
-                original_text = data_entry.get("text")
-
-                if not original_text:
+                
+                if not data_entry.get("text"):
                     logger.warning(f"Warning: Skipping line {line_number} due to missing 'text' field.")
                     continue
-
-                # Rate limiting check
-                current_time = time.time()
-                if request_count >= 29:
-                    elapsed_time = current_time - request_window_start_time
-                    if elapsed_time < 60: # If 29 requests made in less than 1 minute
-                        sleep_duration = 120 # Sleep for 2 minutes
-                        logger.warning(f"Rate limit potentially hit (29 requests in {elapsed_time:.2f}s). Sleeping for {sleep_duration} seconds...")
-                        time.sleep(sleep_duration)
-                        request_count = 0
-                        request_window_start_time = time.time() # Reset window after sleeping
-                    else: # If 1 minute has passed, reset window without sleeping
-                        request_count = 0
-                        request_window_start_time = current_time
-
-                # Generate Q&A pairs using the LLM function
-                try:
-                    qa_pairs = generate_qa_from_text_with_llm(
-                        text_content=original_text,
-                        num_qa_pairs=qa_per_chunk,
-                        api_key=api_key, # Pass the API key
-                        llm_model=llm_model, # Pass the llm_model
-                        api_url=api_url # Pass the custom API URL
-                    )
-                except openai.RateLimitError:
-                    logger.error("API rate limit error received. Stopping generation. Progress has been saved.")
-                    break # Exit the loop and proceed to final summary
-
-                request_count += 1 # Increment request counter after successful call or attempt
-
-                if not qa_pairs:
-                    logger.warning(f"Warning: No Q&A pairs generated for line {line_number} (text starting: '{original_text[:50]}...').")
-                    continue
-
-                for qa in qa_pairs:
-                    if not (isinstance(qa, dict) and "question" in qa and "answer" in qa):
-                        logger.warning(f"Warning: Skipping malformed Q&A pair on line {line_number}: {qa}")
-                        continue
-                    
-                    # Format for instruction fine-tuning
-                    instruction_data = {
-                        "instruction": qa["question"],
-                        "input": "",  # Input can be empty if instruction is self-contained
-                                      # Or, you could put data_entry.get("chunk_id", "") here as a reference
-                        "output": qa["answer"],
-                        "source_document_info": { # Optional: for traceability
-                            "original_source": data_entry.get("source_document"),
-                            "original_chunk_id": data_entry.get("chunk_id"),
-                            "original_text_preview": original_text[:200] + "..." # Preview for easier checking
-                        }
-                    }
-                    outfile.write(json.dumps(instruction_data, ensure_ascii=False) + '\n')
-                    count_generated_qa_pairs += 1
                 
-                count_processed_lines += 1
-                if count_processed_lines > 0 and count_processed_lines % 50 == 0: # Log progress every 50 new lines
-                    logger.info(f"Processed {count_processed_lines} new lines, skipped {count_skipped_lines} lines. Generated {count_generated_qa_pairs} Q&A pairs this session...")
-
+                chunks_to_process.append((data_entry, line_number))
             except json.JSONDecodeError:
                 logger.warning(f"Warning: Skipping line {line_number} due to JSON decode error: {line.strip()}")
             except Exception as e:
-                logger.error(f"Error processing line {line_number}: {line.strip()}. Error: {e}")
+                logger.error(f"Error reading line {line_number}: {line.strip()}. Error: {e}")
+    
+    logger.info(f"Found {len(chunks_to_process)} chunks to process (skipped {count_skipped_lines} already processed)")
+    
+    # Thread-safe lock for writing to file
+    write_lock = threading.Lock()
+    
+    def write_results(outfile, qa_pairs, data_entry, line_number):
+        """Write Q&A pairs to output file in a thread-safe manner"""
+        nonlocal count_generated_qa_pairs, count_processed_lines
+        
+        original_text = data_entry.get("text", "")
+        written_count = 0
+        
+        for qa in qa_pairs:
+            if not (isinstance(qa, dict) and "question" in qa and "answer" in qa):
+                logger.warning(f"Warning: Skipping malformed Q&A pair on line {line_number}: {qa}")
+                continue
+            
+            instruction_data = {
+                "instruction": qa["question"],
+                "input": "",
+                "output": qa["answer"],
+                "source_document_info": {
+                    "original_source": data_entry.get("source_document"),
+                    "original_chunk_id": data_entry.get("chunk_id"),
+                    "original_text_preview": original_text[:200] + "..."
+                }
+            }
+            
+            with write_lock:
+                outfile.write(json.dumps(instruction_data, ensure_ascii=False) + '\n')
+                outfile.flush()  # Ensure data is written immediately
+                count_generated_qa_pairs += 1
+                written_count += 1
+        
+        with write_lock:
+            count_processed_lines += 1
+        
+        return written_count
+    
+    # Process chunks in parallel or sequential
+    with open(output_file_path, 'a', encoding='utf-8') as outfile:
+        if max_parallel_requests > 1:
+            logger.info(f"Processing with {max_parallel_requests} parallel workers...")
+            with ThreadPoolExecutor(max_workers=max_parallel_requests) as executor:
+                # Submit all tasks
+                future_to_chunk = {
+                    executor.submit(
+                        process_single_chunk,
+                        data_entry,
+                        line_number,
+                        qa_per_chunk,
+                        api_key,
+                        llm_model,
+                        api_url
+                    ): (data_entry, line_number)
+                    for data_entry, line_number in chunks_to_process
+                }
+                
+                # Process completed tasks
+                for future in as_completed(future_to_chunk):
+                    data_entry, line_number = future_to_chunk[future]
+                    try:
+                        success, qa_pairs, data_entry, line_number, error_msg = future.result()
+                        
+                        if not success:
+                            if "Rate limit" in str(error_msg):
+                                logger.error(f"Rate limit error on line {line_number}. Consider reducing --max-parallel-requests")
+                            else:
+                                logger.warning(f"Failed to process line {line_number}: {error_msg}")
+                            continue
+                        
+                        if not qa_pairs:
+                            original_text = data_entry.get("text", "")
+                            logger.warning(f"No Q&A pairs generated for line {line_number} (text starting: '{original_text[:50]}...')")
+                            continue
+                        
+                        write_results(outfile, qa_pairs, data_entry, line_number)
+                        
+                        if count_processed_lines % 50 == 0:
+                            logger.info(f"Processed {count_processed_lines} new lines. Generated {count_generated_qa_pairs} Q&A pairs...")
+                    
+                    except Exception as e:
+                        logger.error(f"Error processing line {line_number}: {e}")
+        else:
+            logger.info("Processing sequentially...")
+            for data_entry, line_number in chunks_to_process:
+                success, qa_pairs, data_entry, line_number, error_msg = process_single_chunk(
+                    data_entry, line_number, qa_per_chunk, api_key, llm_model, api_url
+                )
+                
+                if not success:
+                    if "Rate limit" in str(error_msg):
+                        logger.error("API rate limit error received. Stopping generation. Progress has been saved.")
+                        break
+                    else:
+                        logger.warning(f"Failed to process line {line_number}: {error_msg}")
+                    continue
+                
+                if not qa_pairs:
+                    original_text = data_entry.get("text", "")
+                    logger.warning(f"No Q&A pairs generated for line {line_number} (text starting: '{original_text[:50]}...')")
+                    continue
+                
+                write_results(outfile, qa_pairs, data_entry, line_number)
+                
+                if count_processed_lines % 50 == 0:
+                    logger.info(f"Processed {count_processed_lines} new lines. Generated {count_generated_qa_pairs} Q&A pairs...")
 
     logger.info("Synthetic data generation complete or stopped.")
     logger.info(f"Processed {count_processed_lines} new lines from the input file.")
@@ -287,6 +366,7 @@ if __name__ == "__main__":
     # Default Groq model (example)
     DEFAULT_LLM_MODEL = "llama3-8b-8192" # You can change this
     QA_PAIRS_PER_CHUNK = 3
+    DEFAULT_MAX_PARALLEL_REQUESTS = 1  # Default to sequential processing
     
     parser = argparse.ArgumentParser(description="Generate synthetic Q&A data for fine-tuning.")
     parser.add_argument("--input-file", type=str, required=True, help="Path to the input JSONL file.")
@@ -295,11 +375,17 @@ if __name__ == "__main__":
     parser.add_argument("--llm-api-key", type=str, default=None, help="API key for the LLM service. If not provided, uses GROQ_API_KEY env var (not required for vLLM).")
     parser.add_argument("--llm-model", type=str, default=DEFAULT_LLM_MODEL, help=f"The LLM model to use (default: {DEFAULT_LLM_MODEL}).")
     parser.add_argument("--api-url", type=str, default=None, help="Custom API URL (e.g., vLLM endpoint like http://localhost:8000/v1). If not provided, uses Groq API.")
+    parser.add_argument("--max-parallel-requests", type=int, default=None, help=f"Number of parallel requests to send (default: 1 for sequential, can be set via MAX_PARALLEL_REQUESTS env var).")
 
     args = parser.parse_args()
 
     # Determine API key: use command-line arg if provided, otherwise it will be picked up from env var in the function.
     api_key_to_use = args.llm_api_key or os.environ.get("GROQ_API_KEY")
+    
+    # Determine max parallel requests: command-line > env var > default
+    max_parallel = args.max_parallel_requests
+    if max_parallel is None:
+        max_parallel = int(os.environ.get("MAX_PARALLEL_REQUESTS", DEFAULT_MAX_PARALLEL_REQUESTS))
     
     create_synthetic_data(
         args.input_file, 
@@ -307,5 +393,6 @@ if __name__ == "__main__":
         args.qa_per_chunk, 
         api_key=api_key_to_use,
         llm_model=args.llm_model,
-        api_url=args.api_url
+        api_url=args.api_url,
+        max_parallel_requests=max_parallel
     )
