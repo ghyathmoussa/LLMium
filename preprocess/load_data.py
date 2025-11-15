@@ -5,7 +5,7 @@ import gc
 import os
 
 # OPTIMIZATION 1: Use streaming mode - doesn't load entire dataset into memory
-HF_TOKEN="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"
+HF_TOKEN=""
 dataset = load_dataset(
     "nampdn-ai/tiny-codes", 
     # "ar", 
