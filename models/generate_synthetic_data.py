@@ -10,15 +10,16 @@ import re
 
 logger = setup_app_logger(__name__)
 
-def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api_key: str = None, llm_model: str = "llama3-8b-8192"):
+def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api_key: str = None, llm_model: str = "llama3-8b-8192", api_url: str = None):
     """
-    Generates question-answer pairs from the given Arabic text using an LLM via Groq.
+    Generates question-answer pairs from the given Arabic text using an LLM via Groq or custom vLLM API.
 
     Args:
         text_content (str): The Arabic text from which to generate Q&A.
         num_qa_pairs (int): The desired number of Q&A pairs.
-        api_key (str, optional): The Groq API key. Defaults to None.
-        llm_model (str, optional): The model to use via Groq. Defaults to "llama3-8b-8192".
+        api_key (str, optional): The API key. Defaults to None (not required for vLLM).
+        llm_model (str, optional): The model to use. Defaults to "llama3-8b-8192".
+        api_url (str, optional): Custom API URL (e.g., vLLM endpoint). Defaults to Groq.
 
     Returns:
         list: A list of dictionaries, where each dictionary is
@@ -28,21 +29,31 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
     if not text_content:
         return []
 
-    if not api_key:
-        api_key = os.environ.get("GROQ_API_KEY") # Use GROQ_API_KEY for consistency
+    # Determine the base URL
+    if api_url:
+        base_url = api_url
+        # For custom vLLM, API key is optional - use a dummy if not provided
         if not api_key:
-            logger.error("Error: Groq API key not provided. Set GROQ_API_KEY environment variable or use the --llm-api-key argument.")
-            return []
+            api_key = "EMPTY"  # vLLM doesn't require authentication by default
+            logger.info(f"Using custom API URL: {base_url} (without API key)")
+    else:
+        base_url = "https://api.groq.com/openai/v1"
+        # For Groq, API key is required
+        if not api_key:
+            api_key = os.environ.get("GROQ_API_KEY")
+            if not api_key:
+                logger.error("Error: Groq API key not provided. Set GROQ_API_KEY environment variable or use the --llm-api-key argument.")
+                return []
 
     try:
         client = openai.OpenAI(
-            base_url="https://api.groq.com/openai/v1",
+            base_url=base_url,
             api_key=api_key,
             timeout=httpx.Timeout(60.0, connect=10.0), # Added connect and read timeouts
         )
         prompt_text = get_prompt(language='arabic', num_qa_pairs=num_qa_pairs, text_content=text_content)
 
-        logger.debug(f"DEBUG: Calling Groq with model {llm_model} for text starting with: {text_content[:100]}...")
+        logger.debug(f"DEBUG: Calling LLM with model {llm_model} for text starting with: {text_content[:100]}...")
 
         completion = client.chat.completions.create(
             model=llm_model,
@@ -151,7 +162,7 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
         return []
 
 
-def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_key=None, llm_model=None):
+def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_key=None, llm_model=None, api_url=None):
     """
     Reads data from input_file_path, generates synthetic Q&A pairs,
     and writes them to output_file_path in an instruction-following format.
@@ -216,13 +227,14 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
                         request_count = 0
                         request_window_start_time = current_time
 
-                # Generate Q&A pairs using the Groq LLM function
+                # Generate Q&A pairs using the LLM function
                 try:
                     qa_pairs = generate_qa_from_text_with_llm(
                         text_content=original_text,
                         num_qa_pairs=qa_per_chunk,
                         api_key=api_key, # Pass the API key
-                        llm_model=llm_model # Pass the llm_model
+                        llm_model=llm_model, # Pass the llm_model
+                        api_url=api_url # Pass the custom API URL
                     )
                 except openai.RateLimitError:
                     logger.error("API rate limit error received. Stopping generation. Progress has been saved.")
@@ -280,8 +292,9 @@ if __name__ == "__main__":
     parser.add_argument("--input-file", type=str, required=True, help="Path to the input JSONL file.")
     parser.add_argument("--output-file", type=str, required=True, help="Path to the output JSONL file.")
     parser.add_argument("--qa-per-chunk", type=int, default=QA_PAIRS_PER_CHUNK, help="Number of Q&A pairs to generate per text chunk.")
-    parser.add_argument("--llm-api-key", type=str, default=None, help="API key for the Groq service. If not provided, uses GROQ_API_KEY env var.")
-    parser.add_argument("--llm-model", type=str, default=DEFAULT_LLM_MODEL, help=f"The LLM model to use via Groq (default: {DEFAULT_LLM_MODEL}).")
+    parser.add_argument("--llm-api-key", type=str, default=None, help="API key for the LLM service. If not provided, uses GROQ_API_KEY env var (not required for vLLM).")
+    parser.add_argument("--llm-model", type=str, default=DEFAULT_LLM_MODEL, help=f"The LLM model to use (default: {DEFAULT_LLM_MODEL}).")
+    parser.add_argument("--api-url", type=str, default=None, help="Custom API URL (e.g., vLLM endpoint like http://localhost:8000/v1). If not provided, uses Groq API.")
 
     args = parser.parse_args()
 
@@ -293,5 +306,6 @@ if __name__ == "__main__":
         args.output_file, 
         args.qa_per_chunk, 
         api_key=api_key_to_use,
-        llm_model=args.llm_model
+        llm_model=args.llm_model,
+        api_url=args.api_url
     )

@@ -38,6 +38,7 @@ This project focuses on Natural Language Processing (NLP) for Arabic text. It ut
     MONGO_URI=<your_mongodb_uri>
     MONGO_DB_NAME=<your_mongodb_database_name>
     MONGO_COLLECTION_NAME=<your_mongodb_collection_name>
+    GROQ_API_KEY=<your_groq_api_key>  # Optional: only needed if using Groq API for synthetic data generation
     ```
 
 ## Usage
@@ -108,14 +109,29 @@ python finetune_model.py \
 
 * Generating Synthetic Data
 
-```
-python generate_synthetic_data.py \
-  --input-file path/to/dataset \
+**Using vLLM Inference API (no API key required):**
+
+```bash
+python models/generate_synthetic_data.py \
+  --input-file path/to/dataset.jsonl \
   --output-file data/synthetic_finetuning_data.jsonl \
   --qa-per-chunk 3 \
-  --llm-api-key <your_openrouter_api_key> \
-  --llm-model openai/gpt-4o-mini
+  --api-url http://localhost:8000/v1 \
+  --llm-model your-model-name
 ```
+
+**Using Groq API:**
+
+```bash
+python models/generate_synthetic_data.py \
+  --input-file path/to/dataset.jsonl \
+  --output-file data/synthetic_finetuning_data.jsonl \
+  --qa-per-chunk 3 \
+  --llm-api-key <your_groq_api_key> \
+  --llm-model llama3-8b-8192
+```
+
+**Note:** When using `--api-url` for vLLM or other custom inference endpoints, no API key is required. The script will automatically detect the custom endpoint and use it instead of the default Groq API.
 
 * Preprocess Data (Chunking)
 
@@ -133,6 +149,7 @@ The project configuration is managed in `config.py`. This file loads environment
 *   `MONGO_URI`: MongoDB connection string.
 *   `MONGO_DB_NAME`: Name of the MongoDB database.
 *   `MONGO_COLLECTION_NAME`: Name of the MongoDB collection.
+*   `GROQ_API_KEY`: (Optional) Groq API key for synthetic data generation. Not required if using vLLM or other custom inference endpoints.
 
 Ensure these are correctly set in your `.env` file before running the project.
 
