@@ -18,3 +18,5 @@ loguru
 einops
 scipy
 sentence-transformers
+httpx
+aiohttp

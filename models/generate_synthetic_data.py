@@ -7,8 +7,15 @@ import time # Added for rate limiting
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from helpers.get_prompt import get_prompt
 from utils.logger import setup_app_logger
+from models.reward_model import RewardModelEvaluator, create_reward_evaluator
+from utils.reward_functions import (
+    answer_relevance_reward_func,
+    answer_length_reward_func,
+    language_quality_reward_func,
+)
 import re
 import threading
+from typing import Optional, List, Dict
 
 logger = setup_app_logger(__name__)
 
@@ -164,9 +171,19 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
         return []
 
 
-def process_single_chunk(data_entry, line_number, qa_per_chunk, api_key, llm_model, api_url):
+def process_single_chunk(
+    data_entry,
+    line_number,
+    qa_per_chunk,
+    api_key,
+    llm_model,
+    api_url,
+    reward_evaluator: Optional[RewardModelEvaluator] = None,
+):
     """
     Process a single chunk and generate Q&A pairs.
+    Optionally evaluates pairs using a reward model.
+    
     Returns a tuple of (success, qa_pairs, data_entry, line_number, error_message)
     """
     try:
@@ -181,6 +198,19 @@ def process_single_chunk(data_entry, line_number, qa_per_chunk, api_key, llm_mod
             llm_model=llm_model,
             api_url=api_url
         )
+        
+        # Evaluate QA pairs using reward model if provided
+        if reward_evaluator and qa_pairs:
+            try:
+                filtered_pairs, scores = reward_evaluator.evaluate_qa_pairs(qa_pairs)
+                logger.debug(
+                    f"Reward evaluation: {len(filtered_pairs)}/{len(qa_pairs)} "
+                    f"pairs passed (scores: {[f'{s:.3f}' for s in scores]})"
+                )
+                qa_pairs = filtered_pairs
+            except Exception as e:
+                logger.warning(f"Error during reward evaluation: {e}. Continuing with unfiltered pairs.")
+        
         return (True, qa_pairs, data_entry, line_number, None)
     except openai.RateLimitError as e:
         return (False, [], data_entry, line_number, f"Rate limit error: {e}")
@@ -188,17 +218,60 @@ def process_single_chunk(data_entry, line_number, qa_per_chunk, api_key, llm_mod
         return (False, [], data_entry, line_number, f"Error: {e}")
 
 
-def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_key=None, llm_model=None, api_url=None, max_parallel_requests=1):
+def create_synthetic_data(
+    input_file_path,
+    output_file_path,
+    qa_per_chunk,
+    api_key=None,
+    llm_model=None,
+    api_url=None,
+    max_parallel_requests=1,
+    use_reward_model: bool = False,
+    reward_language: str = "multilingual",
+    reward_threshold: float = 0.5,
+    reward_api_type: str = "huggingface",
+    reward_api_key: Optional[str] = None,
+    reward_api_endpoint: Optional[str] = None,
+):
     """
     Reads data from input_file_path, generates synthetic Q&A pairs,
     and writes them to output_file_path in an instruction-following format.
     The process is resumable and will skip already processed chunks.
     
     Args:
-        max_parallel_requests (int): Number of parallel requests to send. Default is 1 (sequential).
+        input_file_path (str): Path to input JSONL file
+        output_file_path (str): Path to output JSONL file
+        qa_per_chunk (int): Number of Q&A pairs per chunk
+        api_key (str, optional): API key for LLM service
+        llm_model (str, optional): LLM model to use
+        api_url (str, optional): Custom API URL for LLM
+        max_parallel_requests (int): Number of parallel requests. Default is 1 (sequential).
+        use_reward_model (bool): Whether to evaluate QA pairs with reward model. Default is False.
+        reward_language (str): Language for reward model ('arabic', 'english', 'multilingual')
+        reward_threshold (float): Minimum reward score to keep QA pair (0-1)
+        reward_api_type (str): Type of API for reward model ('huggingface', 'openai', 'vllm', 'local')
+        reward_api_key (str, optional): API key for reward model service
+        reward_api_endpoint (str, optional): Custom endpoint for reward model
     """
     logger.info(f"Starting synthetic data generation from '{input_file_path}'...")
     logger.info(f"Max parallel requests: {max_parallel_requests}")
+    
+    # Initialize reward model if enabled
+    reward_evaluator = None
+    if use_reward_model:
+        logger.info(f"Initializing reward model (language: {reward_language}, threshold: {reward_threshold})...")
+        try:
+            reward_evaluator = create_reward_evaluator(
+                language=reward_language,
+                reward_threshold=reward_threshold,
+                api_type=reward_api_type,
+                api_key=reward_api_key,
+                api_endpoint=reward_api_endpoint,
+            )
+            logger.info("Reward model initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize reward model: {e}. Continuing without reward model.")
+            reward_evaluator = None
     
     processed_chunk_ids = set()
     if os.path.exists(output_file_path):
@@ -274,6 +347,10 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
                 }
             }
             
+            # Add reward score if available
+            if "reward_score" in qa:
+                instruction_data["reward_score"] = qa["reward_score"]
+            
             with write_lock:
                 outfile.write(json.dumps(instruction_data, ensure_ascii=False) + '\n')
                 outfile.flush()  # Ensure data is written immediately
@@ -299,7 +376,8 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
                         qa_per_chunk,
                         api_key,
                         llm_model,
-                        api_url
+                        api_url,
+                        reward_evaluator,
                     ): (data_entry, line_number)
                     for data_entry, line_number in chunks_to_process
                 }
@@ -333,7 +411,7 @@ def create_synthetic_data(input_file_path, output_file_path, qa_per_chunk, api_k
             logger.info("Processing sequentially...")
             for data_entry, line_number in chunks_to_process:
                 success, qa_pairs, data_entry, line_number, error_msg = process_single_chunk(
-                    data_entry, line_number, qa_per_chunk, api_key, llm_model, api_url
+                    data_entry, line_number, qa_per_chunk, api_key, llm_model, api_url, reward_evaluator
                 )
                 
                 if not success:
@@ -368,7 +446,7 @@ if __name__ == "__main__":
     QA_PAIRS_PER_CHUNK = 3
     DEFAULT_MAX_PARALLEL_REQUESTS = 1  # Default to sequential processing
     
-    parser = argparse.ArgumentParser(description="Generate synthetic Q&A data for fine-tuning.")
+    parser = argparse.ArgumentParser(description="Generate synthetic Q&A data for fine-tuning with optional reward model filtering.")
     parser.add_argument("--input-file", type=str, required=True, help="Path to the input JSONL file.")
     parser.add_argument("--output-file", type=str, required=True, help="Path to the output JSONL file.")
     parser.add_argument("--qa-per-chunk", type=int, default=QA_PAIRS_PER_CHUNK, help="Number of Q&A pairs to generate per text chunk.")
@@ -376,6 +454,14 @@ if __name__ == "__main__":
     parser.add_argument("--llm-model", type=str, default=DEFAULT_LLM_MODEL, help=f"The LLM model to use (default: {DEFAULT_LLM_MODEL}).")
     parser.add_argument("--api-url", type=str, default=None, help="Custom API URL (e.g., vLLM endpoint like http://localhost:8000/v1). If not provided, uses Groq API.")
     parser.add_argument("--max-parallel-requests", type=int, default=None, help=f"Number of parallel requests to send (default: 1 for sequential, can be set via MAX_PARALLEL_REQUESTS env var).")
+    
+    # Reward model arguments
+    parser.add_argument("--use-reward-model", action="store_true", help="Enable reward model evaluation for Q&A pairs.")
+    parser.add_argument("--reward-language", type=str, default="multilingual", choices=["arabic", "english", "multilingual"], help="Language for reward model (default: multilingual).")
+    parser.add_argument("--reward-threshold", type=float, default=0.5, help="Minimum reward score to keep Q&A pair (0-1, default: 0.5).")
+    parser.add_argument("--reward-api-type", type=str, default="huggingface", choices=["huggingface", "openai", "vllm", "local"], help="Type of API for reward model (default: huggingface).")
+    parser.add_argument("--reward-api-key", type=str, default=None, help="API key for reward model service.")
+    parser.add_argument("--reward-api-endpoint", type=str, default=None, help="Custom endpoint for reward model (e.g., for vLLM).")
 
     args = parser.parse_args()
 
@@ -387,6 +473,9 @@ if __name__ == "__main__":
     if max_parallel is None:
         max_parallel = int(os.environ.get("MAX_PARALLEL_REQUESTS", DEFAULT_MAX_PARALLEL_REQUESTS))
     
+    # Determine reward API key
+    reward_api_key = args.reward_api_key or os.environ.get("HF_API_TOKEN")
+    
     create_synthetic_data(
         args.input_file, 
         args.output_file, 
@@ -394,5 +483,11 @@ if __name__ == "__main__":
         api_key=api_key_to_use,
         llm_model=args.llm_model,
         api_url=args.api_url,
-        max_parallel_requests=max_parallel
+        max_parallel_requests=max_parallel,
+        use_reward_model=args.use_reward_model,
+        reward_language=args.reward_language,
+        reward_threshold=args.reward_threshold,
+        reward_api_type=args.reward_api_type,
+        reward_api_key=reward_api_key,
+        reward_api_endpoint=args.reward_api_endpoint,
     )

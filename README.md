@@ -12,6 +12,7 @@ This project focuses on Natural Language Processing (NLP) for Arabic text. It ut
 *   Finetuning Reasoning Model
 *   Finetuning SFT Models
 *   Data processing pipelines
+*   **Reward Model for Synthetic Data Evaluation** (Multi-language: Arabic, English, Multilingual)
 *   Integration with MongoDB
 *   Customizable logging
 *   Potential for reinforcement learning or custom model training
@@ -39,6 +40,7 @@ This project focuses on Natural Language Processing (NLP) for Arabic text. It ut
     MONGO_DB_NAME=<your_mongodb_database_name>
     MONGO_COLLECTION_NAME=<your_mongodb_collection_name>
     GROQ_API_KEY=<your_groq_api_key>  # Optional: only needed if using Groq API for synthetic data generation
+    HF_API_TOKEN=<your_huggingface_token>  # Optional: for reward model evaluation
     MAX_PARALLEL_REQUESTS=5  # Optional: number of parallel requests for synthetic data generation (default: 1)
     ```
 
@@ -168,6 +170,96 @@ python3 preprocess_data.py \
     --max-tokens 2048 \
     --skip-header "Header text to skip"
 ```
+
+* Reward Model for Synthetic Data Evaluation
+
+The reward model system evaluates and filters synthetic Q&A pairs for quality assurance. It supports multiple languages (Arabic, English, Multilingual) and multiple API backends.
+
+**Quick Usage:**
+
+```bash
+# Basic usage with HuggingFace API
+python models/generate_synthetic_data.py \
+  --input-file data/input.jsonl \
+  --output-file data/output.jsonl \
+  --qa-per-chunk 3 \
+  --use-reward-model
+
+# Arabic-specific processing with threshold
+python models/generate_synthetic_data.py \
+  --input-file data/arabic_texts.jsonl \
+  --output-file data/filtered.jsonl \
+  --qa-per-chunk 3 \
+  --use-reward-model \
+  --reward-language arabic \
+  --reward-threshold 0.6
+
+# Using local vLLM for faster processing
+python models/generate_synthetic_data.py \
+  --input-file data/input.jsonl \
+  --output-file data/output.jsonl \
+  --use-reward-model \
+  --reward-api-type vllm \
+  --reward-api-endpoint http://localhost:8001/v1
+```
+
+**Reward Model Features:**
+- ✅ Multi-language support: Arabic, English, Multilingual
+- ✅ Multiple API backends: HuggingFace, OpenAI, vLLM, Local models
+- ✅ 7 reward functions for evaluation
+- ✅ Automatic QA pair filtering based on threshold
+- ✅ Programmatic Python API
+
+**Environment Variables:**
+```env
+HF_API_TOKEN=<your_huggingface_token>  # For reward model evaluation
+GROQ_API_KEY=<your_groq_api_key>        # For LLM generation
+```
+
+**Reward Model Arguments:**
+```
+--use-reward-model              Enable reward evaluation (default: disabled)
+--reward-language               Language: multilingual, arabic, english
+--reward-threshold              Min score to keep (0-1, default: 0.5)
+--reward-api-type               API type: huggingface, openai, vllm, local
+--reward-api-key                API key for reward service
+--reward-api-endpoint           Custom endpoint (for vLLM)
+```
+
+**Programmatic Usage:**
+```python
+from models.reward_model import create_reward_evaluator
+
+evaluator = create_reward_evaluator(
+    language="arabic",
+    reward_threshold=0.6,
+    api_type="huggingface"
+)
+
+qa_pairs = [
+    {"question": "سؤال؟", "answer": "إجابة تفصيلية"},
+]
+filtered_pairs, scores = evaluator.evaluate_qa_pairs(qa_pairs)
+```
+
+**Example Output:**
+Each Q&A pair includes a reward score when filtered:
+```json
+{
+  "instruction": "السؤال؟",
+  "input": "",
+  "output": "الإجابة",
+  "reward_score": 0.85,
+  "source_document_info": {...}
+}
+```
+
+**Performance Metrics:**
+| API Type | Speed | Quality | Setup |
+|----------|-------|---------|-------|
+| HuggingFace API | 1-3s/pair | Excellent | Easiest |
+| Local vLLM | 0.1-0.5s/pair | Excellent | Medium |
+| Local Model | 0.2-0.5s/pair | Excellent | Medium |
 ## Configuration
 
 The project configuration is managed in `config.py`. This file loads environment variables from a `.env` file located in the project root. Key configuration variables include:
@@ -176,6 +268,7 @@ The project configuration is managed in `config.py`. This file loads environment
 *   `MONGO_DB_NAME`: Name of the MongoDB database.
 *   `MONGO_COLLECTION_NAME`: Name of the MongoDB collection.
 *   `GROQ_API_KEY`: (Optional) Groq API key for synthetic data generation. Not required if using vLLM or other custom inference endpoints.
+*   `HF_API_TOKEN`: (Optional) HuggingFace API token for reward model evaluation. Can also be used via `--reward-api-key` argument.
 *   `MAX_PARALLEL_REQUESTS`: (Optional) Number of parallel requests to send to the API for synthetic data generation. Default is 1 (sequential). Higher values improve speed but may hit rate limits.
 
 Ensure these are correctly set in your `.env` file before running the project.
