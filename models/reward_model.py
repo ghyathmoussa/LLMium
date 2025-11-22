@@ -10,6 +10,7 @@ import json
 import os
 import httpx
 import asyncio
+import re
 from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 from utils.logger import setup_app_logger
@@ -33,21 +34,21 @@ class RewardModelConfig:
 REWARD_MODEL_CONFIGS = {
     "arabic": RewardModelConfig(
         model_name="Arabic Reward Model",
-        model_id="OpenAssistant/reward-model-deberta-v3-large-v2",
+        model_id="nvidia/llama-embed-nemotron-8b",
         language="arabic",
         api_type="huggingface",
         description="Best reward model for Arabic language with multilingual support"
     ),
     "english": RewardModelConfig(
         model_name="English Reward Model",
-        model_id="OpenAssistant/reward-model-deberta-v3-large-v2",
+        model_id="nvidia/llama-embed-nemotron-8b",
         language="english",
         api_type="huggingface",
         description="Best reward model for English language"
     ),
     "multilingual": RewardModelConfig(
         model_name="Multilingual Reward Model",
-        model_id="OpenAssistant/reward-model-deberta-v3-large-v2",
+        model_id="nvidia/llama-embed-nemotron-8b",
         language="multilingual",
         api_type="huggingface",
         description="Supports both Arabic and English"
@@ -219,18 +220,27 @@ class RewardModelAPI:
                 
                 url = f"https://api-inference.huggingface.co/models/{self.config.model_id}"
                 
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                
-                result = response.json()
-                
-                # Extract score from response
-                if isinstance(result, list) and len(result) > 0:
-                    # HuggingFace typically returns [{"score": value}]
-                    score = result[0].get("score", 0.5)
-                    return float(score)
-                else:
-                    return 0.5
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    
+                    result = response.json()
+                    
+                    # Extract score from response
+                    if result and isinstance(result, list) and len(result) > 0:
+                        # HuggingFace typically returns [{"score": value}]
+                        score = result[0].get("score", 0.5)
+                        return float(score)
+                    else:
+                        logger.warning(f"Unexpected HuggingFace API response format: {result}")
+                        return 0.5
+                        
+                except httpx.HTTPStatusError as e:
+                    logger.error(f"HuggingFace API HTTP error: {e.status_code} - {e.response.text}")
+                    return 0.0
+                except httpx.TimeoutException as e:
+                    logger.error(f"HuggingFace API timeout: {e}")
+                    return 0.0
                     
         except httpx.HTTPError as e:
             logger.error(f"HuggingFace API error: {e}")
@@ -245,44 +255,159 @@ class RewardModelAPI:
         answer: str,
         context: Optional[str] = None,
     ) -> float:
-        """Score using vLLM inference endpoint."""
+        """Score using vLLM inference endpoint with retry logic.
+
+        This method supports two common vLLM server modes:
+        - Completions/OpenAI-compatible endpoints ("completions")
+        - Score-only mode (--task score) which exposes a /score endpoint
+
+        It will try completions endpoints first and if the server returns an
+        error indicating the model does not support the Completions API it will
+        automatically try the /v1/score or /score endpoints and attempt to
+        parse a numeric score from a variety of possible response formats.
+        """
         if not self.api_endpoint:
             logger.warning("vLLM endpoint not provided.")
             return 0.5
-        
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                prompt = f"Question: {question}\nAnswer: {answer}\n\nRate the answer quality (0-1):"
-                
-                payload = {
-                    "model": self.config.model_id,
-                    "prompt": prompt,
-                    "max_tokens": 10,
-                    "temperature": 0.0,
-                }
-                
-                response = await client.post(
-                    f"{self.api_endpoint}/v1/completions",
-                    json=payload
-                )
-                response.raise_for_status()
-                
-                result = response.json()
-                
-                # Extract score from completion
-                if "choices" in result and len(result["choices"]) > 0:
-                    text = result["choices"][0].get("text", "0.5").strip()
-                    try:
-                        score = float(text)
-                        return max(0.0, min(1.0, score))
-                    except ValueError:
-                        return 0.5
-                else:
-                    return 0.5
+
+        base = self.api_endpoint.rstrip('/')
+
+        # endpoints to try in order: prefer /score but also try common variants if 404 occurs
+        endpoints_to_try = [f"{base}/score", f"{base}/v1/score", f"{base}/score/"]
+
+        max_retries = 3
+        retry_delay = 1.0
+
+        def _parse_score_from_result(res) -> Optional[float]:
+            # Try many common response shapes for a numeric score
+            try:
+                if isinstance(res, dict):
+                    # vLLM /score endpoint returns: {'data': [{'score': 0.64}]}
+                    if isinstance(res.get('data'), list) and len(res.get('data')) > 0:
+                        first_data = res.get('data')[0]
+                        if isinstance(first_data, dict) and isinstance(first_data.get('score'), (int, float)):
+                            return float(first_data.get('score'))
                     
-        except Exception as e:
-            logger.error(f"Error scoring with vLLM: {e}")
-            return 0.0
+                    # direct numeric fields
+                    if isinstance(res.get('score'), (int, float)):
+                        return float(res.get('score'))
+                    if isinstance(res.get('scores'), list) and len(res.get('scores')) > 0:
+                        first = res.get('scores')[0]
+                        if isinstance(first, (int, float)):
+                            return float(first)
+                        if isinstance(first, dict) and isinstance(first.get('score'), (int, float)):
+                            return float(first.get('score'))
+
+                    if isinstance(res.get('predictions'), list) and len(res.get('predictions')) > 0:
+                        p0 = res.get('predictions')[0]
+                        if isinstance(p0, (int, float)):
+                            return float(p0)
+                        if isinstance(p0, dict):
+                            for k in ('score', 'probability'):
+                                if isinstance(p0.get(k), (int, float)):
+                                    return float(p0.get(k))
+
+                    if isinstance(res.get('choices'), list) and len(res.get('choices')) > 0:
+                        choice = res.get('choices')[0]
+                        # Try text field like completions
+                        text = choice.get('text') or (choice.get('message') or {}).get('content')
+                        if isinstance(text, str):
+                            try:
+                                return float(text.strip())
+                            except Exception:
+                                pass
+
+                # Fallback: search for a 0..1 floating number in the JSON string
+                s = json.dumps(res)
+                m = re.search(r"\b(0(?:\.\d+)?|1(?:\.0+)?)\b", s)
+                if m:
+                    try:
+                        return float(m.group(1))
+                    except Exception:
+                        return None
+            except Exception:
+                return None
+
+            return None
+
+        for attempt in range(max_retries):
+            for endpoint in endpoints_to_try:
+                try:
+                    async with httpx.AsyncClient(timeout=self.timeout) as client:
+                        prompt = f"Question: {question}\nAnswer: {answer}\n\nRate the answer quality (0-1):"
+
+                        # Build the score-endpoint payload expected by vLLM --task score.
+                        # vLLM /score endpoint expects: model, text_1, text_2, and optional fields.
+                        # NOTE: do not include additionalProp1 or other unknown fields.
+                        payload = {
+                            "model": self.config.model_id,
+                            "text_1": [question],
+                            "text_2": [answer],
+                        }
+
+                        try:
+                            logger.info(f"vLLM scoring: POST {endpoint} (attempt {attempt + 1}/{max_retries}) with model {self.config.model_id}")
+                            response = await client.post(endpoint, json=payload)
+                        except httpx.RequestError as e:
+                            logger.info(f"Request error to {endpoint}: {e}")
+                            continue
+
+                        # If non-2xx, log body to help debug and try retry
+                        if response.status_code >= 400:
+                            body_text = None
+                            try:
+                                body_text = response.text
+                            except Exception:
+                                body_text = '<unreadable>'
+                            logger.info(f"vLLM {endpoint} returned status {response.status_code}: {body_text[:200]}")
+                            # try to parse any score-like info from body
+                            try:
+                                result = response.json()
+                                logger.info(f"vLLM reward model response: {result}")
+                                parsed = _parse_score_from_result(result)
+                                if parsed is not None:
+                                    return max(0.0, min(1.0, parsed))
+                            except Exception:
+                                pass
+                            # will retry next cycle
+                            continue
+
+                        # Success; parse JSON
+                        try:
+                            result = response.json()
+                        except Exception as e:
+                            logger.debug(f"Failed to parse JSON from vLLM {endpoint}: {e}")
+                            continue
+
+                        logger.info(f"vLLM /score response (status 200): {result}")
+
+                        # If the server returned an explicit error, log it and stop.
+                        if isinstance(result, dict) and result.get('error'):
+                            logger.error(f"vLLM returned error while scoring: {result.get('error')}")
+                            return 0.0
+
+                        # Try to parse numeric score from result
+                        parsed = _parse_score_from_result(result)
+                        if parsed is not None:
+                            logger.info(f"vLLM score parsed: {parsed:.4f}")
+                            return max(0.0, min(1.0, parsed))
+
+                        logger.warning(f"Could not parse numeric score from vLLM /score response: {result}")
+                        # nothing usable, will retry next cycle
+                        continue
+
+                except Exception as e:
+                    logger.debug(f"Unexpected error calling vLLM endpoint {endpoint}: {e}")
+                    continue
+
+            # Backoff between retry cycles
+            if attempt < max_retries - 1:
+                logger.debug(f"vLLM scoring retry cycle {attempt + 1}/{max_retries} failed for all endpoints; sleeping {retry_delay}s before retrying...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+
+        logger.error(f"Error scoring with vLLM: Failed after {max_retries} attempts across endpoints")
+        return 0.0
     
     async def _score_with_openai(
         self,
@@ -317,11 +442,17 @@ Provide only a number between 0 and 1 as your response."""
                 max_tokens=10,
             )
             
+            # Validate response
+            if not response or not response.choices or len(response.choices) == 0:
+                logger.warning(f"Invalid OpenAI response: {response}")
+                return 0.5
+            
             text = response.choices[0].message.content.strip()
             try:
                 score = float(text)
                 return max(0.0, min(1.0, score))
             except ValueError:
+                logger.warning(f"Could not parse score from OpenAI response: {text}")
                 return 0.5
                 
         except Exception as e:

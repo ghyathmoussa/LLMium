@@ -74,6 +74,11 @@ def generate_qa_from_text_with_llm(text_content: str, num_qa_pairs: int = 3, api
             ]
         )
         
+        # Validate completion response
+        if not completion or not completion.choices or len(completion.choices) == 0:
+            logger.error(f"Invalid response from LLM: completion={completion}, choices={completion.choices if completion else None}")
+            return []
+        
         response_content = completion.choices[0].message.content
         logger.debug(f"DEBUG: Raw LLM response: {response_content}") # For debugging
         logger.debug(f"length of prompt_text: {len(prompt_text)}")
