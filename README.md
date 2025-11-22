@@ -1,59 +1,75 @@
-# LLM-TOOL-KIT
+# ✨ LLMium
 
-## Description
+> **The Complete Toolkit for Intelligent Language Model Development & Deployment**
 
-This project focuses on Natural Language Processing (NLP) for Arabic text. It utilizes transformer models and other NLP techniques for tasks such as data processing and semantic analysis. The project uses MongoDB for data storage and includes utilities for logging and potentially reward functions for reinforcement learning or custom training loops.
+Unlock the full potential of language models with LLMium—a modern, comprehensive toolkit designed for researchers, engineers, and data scientists. Whether you're fine-tuning cutting-edge models, generating synthetic training data, or evaluating quality with sophisticated reward systems, LLMium makes it effortless.
 
-## Features
+## 🎯 What is LLMium?
 
-*   Semantic analysis
-*   Training Embedding Model
-*   Training Tokenizer
-*   Finetuning Reasoning Model
-*   Finetuning SFT Models
-*   Data processing pipelines
-*   **Reward Model for Synthetic Data Evaluation** (Multi-language: Arabic, English, Multilingual)
-*   Integration with MongoDB
-*   Customizable logging
-*   Potential for reinforcement learning or custom model training
+LLMium is a production-ready framework for building, training, and deploying language models with support for **Arabic & multilingual NLP**. It combines state-of-the-art transformer techniques, intelligent data processing, and quality evaluation into one seamless experience.
 
-## Installation
+## 🚀 Features
 
-1.  **Clone the repository:**
-    ```bash
-    git clone 'https://github.com/ghyathmoussa/llm-tool-kit.git'
-    cd `llm-tool-kit`
-    ```
-2.  **Create a virtual environment (recommended):**
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-    ```
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-4.  **Set up environment variables:**
-    Create a `.env` file in the project root and add the following variables:
-    ```env
-    MONGO_URI=<your_mongodb_uri>
-    MONGO_DB_NAME=<your_mongodb_database_name>
-    MONGO_COLLECTION_NAME=<your_mongodb_collection_name>
-    GROQ_API_KEY=<your_groq_api_key>  # Optional: only needed if using Groq API for synthetic data generation
-    HF_API_TOKEN=<your_huggingface_token>  # Optional: for reward model evaluation
-    MAX_PARALLEL_REQUESTS=5  # Optional: number of parallel requests for synthetic data generation (default: 1)
-    ```
+**Core Capabilities:**
+- 🧠 **Smart Model Fine-tuning** — Reasoning models, SFT, and custom training loops
+- 📊 **Semantic Analysis** — Advanced NLP for Arabic and multilingual text
+- 🎯 **Synthetic Data Generation** — Auto-generate QA pairs powered by LLMs (vLLM, Groq, OpenAI)
+- ⭐ **Quality Assurance** — Multi-language reward models (Arabic, English, Multilingual)
+- 🔤 **Tokenizer Training** — Build custom tokenizers for specialized vocabularies
+- 📈 **Embedding Models** — Train and fine-tune semantic embeddings
+- 🗄️ **MongoDB Integration** — Seamless data persistence and retrieval
+- ⚡ **Parallel Processing** — Fast, concurrent API requests for scale
+- 🐳 **Docker Ready** — One-command deployment with containerization
+- 📝 **Comprehensive Logging** — Track everything with structured logging
 
-## Usage
+## 📦 Installation
 
-* Tokenizer Model
+### Quick Start (3 steps)
 
+**1. Clone the repository:**
+```bash
+git clone https://github.com/ghyathmoussa/llm-tool-kit.git
+cd llm-tool-kit
 ```
-python3 tokenizer_model.py \
+
+**2. Set up your environment:**
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**3. Configure environment variables:**
+
+Create a `.env` file in the project root:
+```env
+# MongoDB (required for data persistence)
+MONGO_URI=mongodb+srv://user:password@cluster.mongodb.net
+MONGO_DB_NAME=llmium_db
+MONGO_COLLECTION_NAME=training_data
+
+# API Keys (optional, depending on features used)
+GROQ_API_KEY=your_groq_api_key              # For synthetic data generation
+HF_API_TOKEN=your_huggingface_token         # For reward model evaluation
+
+# Performance tuning (optional)
+MAX_PARALLEL_REQUESTS=5                      # Parallel API requests (default: 1)
+```
+
+✅ **You're all set!** Proceed to [Usage](#usage) to get started.
+
+## 💡 Usage
+
+### 1️⃣ Train a Custom Tokenizer
+
+Build a specialized tokenizer optimized for your domain or language:
+
+```bash
+python3 models/tokenizer_model.py \
     --tokenizer-name "custom-arabic-tokenizer" \
     --vocab-size 32000 \
     --max-length 4096 \
-    --model-path "/path/to/tokenizer.json" \
+    --model-path "./tokenizer.json" \
     --texts-source "data1.jsonl" \
     --min-frequency 2 \
     --batch-size 1000 \
@@ -61,37 +77,43 @@ python3 tokenizer_model.py \
     --special-tokens "[PAD]" "[UNK]" "[CLS]" "[SEP]" "[MASK]"
 ```
 
-* Embeddings Model
+---
 
-```
-python3 embeddings_model.py \
-     --data_path data1.jsonl \
-     --batch_size 16 \
+### 2️⃣ Train Embedding Models
+
+Create semantic embeddings from your text data:
+
+```bash
+python3 models/embeddings_model.py \
+    --data_path data1.jsonl \
+    --batch_size 16 \
     --learning_rate 0.001 \
     --epochs 5
 ```
 
-* Finetune Model
+---
 
-Example of data structure
+### 3️⃣ Fine-tune Reasoning & SFT Models
 
-```
+Adapt pre-trained models for your specific tasks. Start with your dataset:
+
+**Dataset Format:**
+```json
 [
   {
     "problem": "Solve for x: 2x + 5 = 11",
     "solution": "x = 3"
   },
   {
-    "problem": "If a train travels at 60 mph for 2 hours, and then at 40 mph for 1 hour, what is the total distance traveled?",
+    "problem": "If a train travels at 60 mph for 2 hours, then at 40 mph for 1 hour, what is the total distance?",
     "solution": "Total distance = 160 miles"
   }
 ]
 ```
 
-Running Code:
-
-```
-python finetune_model.py \
+**Fine-tune with LoRA optimization:**
+```bash
+python models/finetune_model.py \
   --ft-type reasoning \
   --use-quantization lora \
   --model-name Qwen/QwQ-32B-Preview \
@@ -101,8 +123,6 @@ python finetune_model.py \
   --gradient-accumulation_steps 2 \
   --learning-rate 2e-4 \
   --num_train-epochs 3 \
-  --max-steps -1 \
-  --prompt "" \
   --max-length 4096 \
   --padding-side right \
   --beta 0.04 \
@@ -110,10 +130,13 @@ python finetune_model.py \
   --max-completion-length 128
 ```
 
-* Generating Synthetic Data
+---
 
-**Using vLLM Inference API (no API key required):**
+### 4️⃣ Generate Synthetic Training Data
 
+Auto-generate QA pairs from raw text—choose your inference backend:
+
+**Option A: Local vLLM (No API key needed):**
 ```bash
 python models/generate_synthetic_data.py \
   --input-file path/to/dataset.jsonl \
@@ -123,21 +146,18 @@ python models/generate_synthetic_data.py \
   --llm-model your-model-name
 ```
 
-**Using Groq API:**
-
+**Option B: Groq API (Fast & Cost-effective):**
 ```bash
 python models/generate_synthetic_data.py \
   --input-file path/to/dataset.jsonl \
   --output-file data/synthetic_finetuning_data.jsonl \
   --qa-per-chunk 3 \
-  --llm-api-key <your_groq_api_key> \
+  --llm-api-key $GROQ_API_KEY \
   --llm-model llama3-8b-8192
 ```
 
-**Using Parallel Requests (for faster processing):**
-
+**Option C: Parallel Processing (Speed boost):**
 ```bash
-# Using command-line argument
 python models/generate_synthetic_data.py \
   --input-file path/to/dataset.jsonl \
   --output-file data/synthetic_finetuning_data.jsonl \
@@ -145,47 +165,16 @@ python models/generate_synthetic_data.py \
   --api-url http://localhost:8000/v1 \
   --llm-model your-model-name \
   --max-parallel-requests 5
-
-# Or using environment variable
-export MAX_PARALLEL_REQUESTS=5
-python models/generate_synthetic_data.py \
-  --input-file path/to/dataset.jsonl \
-  --output-file data/synthetic_finetuning_data.jsonl \
-  --qa-per-chunk 3 \
-  --api-url http://localhost:8000/v1 \
-  --llm-model your-model-name
 ```
 
-**Notes:**
-- When using `--api-url` for vLLM or other custom inference endpoints, no API key is required. The script will automatically detect the custom endpoint and use it instead of the default Groq API.
-- `--max-parallel-requests` controls how many concurrent requests are sent to the API (default: 1 for sequential processing). Higher values speed up processing but may hit rate limits.
-- You can set `MAX_PARALLEL_REQUESTS` environment variable to avoid passing it as an argument every time.
+---
 
-* Preprocess Data (Chunking)
+### 5️⃣ Quality Evaluation with Reward Models
 
-```
-python3 preprocess_data.py \
-    --input-dir path/to/data/directory \
-    --output-file path/to/output.jsonl \
-    --max-tokens 2048 \
-    --skip-header "Header text to skip"
-```
+Filter and score synthetic data using intelligent multi-language reward models:
 
-* Reward Model for Synthetic Data Evaluation
-
-The reward model system evaluates and filters synthetic Q&A pairs for quality assurance. It supports multiple languages (Arabic, English, Multilingual) and multiple API backends.
-
-**Quick Usage:**
-
+**Quick Usage (Arabic data with quality threshold):**
 ```bash
-# Basic usage with HuggingFace API
-python models/generate_synthetic_data.py \
-  --input-file data/input.jsonl \
-  --output-file data/output.jsonl \
-  --qa-per-chunk 3 \
-  --use-reward-model
-
-# Arabic-specific processing with threshold
 python models/generate_synthetic_data.py \
   --input-file data/arabic_texts.jsonl \
   --output-file data/filtered.jsonl \
@@ -193,8 +182,10 @@ python models/generate_synthetic_data.py \
   --use-reward-model \
   --reward-language arabic \
   --reward-threshold 0.6
+```
 
-# Using local vLLM for faster processing
+**Using Local vLLM (Faster & Cheaper):**
+```bash
 python models/generate_synthetic_data.py \
   --input-file data/input.jsonl \
   --output-file data/output.jsonl \
@@ -203,30 +194,7 @@ python models/generate_synthetic_data.py \
   --reward-api-endpoint http://localhost:8001/v1
 ```
 
-**Reward Model Features:**
-- ✅ Multi-language support: Arabic, English, Multilingual
-- ✅ Multiple API backends: HuggingFace, OpenAI, vLLM, Local models
-- ✅ 7 reward functions for evaluation
-- ✅ Automatic QA pair filtering based on threshold
-- ✅ Programmatic Python API
-
-**Environment Variables:**
-```env
-HF_API_TOKEN=<your_huggingface_token>  # For reward model evaluation
-GROQ_API_KEY=<your_groq_api_key>        # For LLM generation
-```
-
-**Reward Model Arguments:**
-```
---use-reward-model              Enable reward evaluation (default: disabled)
---reward-language               Language: multilingual, arabic, english
---reward-threshold              Min score to keep (0-1, default: 0.5)
---reward-api-type               API type: huggingface, openai, vllm, local
---reward-api-key                API key for reward service
---reward-api-endpoint           Custom endpoint (for vLLM)
-```
-
-**Programmatic Usage:**
+**Programmatic Python API:**
 ```python
 from models.reward_model import create_reward_evaluator
 
@@ -242,8 +210,7 @@ qa_pairs = [
 filtered_pairs, scores = evaluator.evaluate_qa_pairs(qa_pairs)
 ```
 
-**Example Output:**
-Each Q&A pair includes a reward score when filtered:
+**Output with quality scores:**
 ```json
 {
   "instruction": "السؤال؟",
@@ -254,86 +221,170 @@ Each Q&A pair includes a reward score when filtered:
 }
 ```
 
-**Performance Metrics:**
-| API Type | Speed | Quality | Setup |
-|----------|-------|---------|-------|
-| HuggingFace API | 1-3s/pair | Excellent | Easiest |
-| Local vLLM | 0.1-0.5s/pair | Excellent | Medium |
-| Local Model | 0.2-0.5s/pair | Excellent | Medium |
-## Configuration
+**Reward Model Options:**
 
-The project configuration is managed in `config.py`. This file loads environment variables from a `.env` file located in the project root. Key configuration variables include:
+| Argument | Values | Purpose |
+|----------|--------|---------|
+| `--reward-language` | `multilingual`, `arabic`, `english` | Evaluate in target language |
+| `--reward-threshold` | `0.0–1.0` (default: 0.5) | Quality cutoff score |
+| `--reward-api-type` | `huggingface`, `openai`, `vllm`, `local` | Evaluation backend |
+| `--reward-api-endpoint` | URL | Custom endpoint (for vLLM/local) |
 
-*   `MONGO_URI`: MongoDB connection string.
-*   `MONGO_DB_NAME`: Name of the MongoDB database.
-*   `MONGO_COLLECTION_NAME`: Name of the MongoDB collection.
-*   `GROQ_API_KEY`: (Optional) Groq API key for synthetic data generation. Not required if using vLLM or other custom inference endpoints.
-*   `HF_API_TOKEN`: (Optional) HuggingFace API token for reward model evaluation. Can also be used via `--reward-api-key` argument.
-*   `MAX_PARALLEL_REQUESTS`: (Optional) Number of parallel requests to send to the API for synthetic data generation. Default is 1 (sequential). Higher values improve speed but may hit rate limits.
+---
 
-Ensure these are correctly set in your `.env` file before running the project.
+### 6️⃣ Preprocess & Chunk Text
 
-## Data
+Split large documents into tokenizable chunks:
 
-The project appears to use the [`Tashkeela-arabic-diacritized-text-utf8-0.3`](https://sourceforge.net/projects/tashkeela/files/Tashkeela-arabic-diacritized-text-utf8-0.3.zip/download) dataset, which can be found in the `Tashkeela-arabic-diacritized-text-utf8-0.3/` directory. Processed data or data used for modeling may be stored in json file.
+```bash
+python3 models/preprocess_data.py \
+    --input-dir path/to/data/directory \
+    --output-file path/to/output.jsonl \
+    --max-tokens 2048 \
+    --skip-header "Header text to skip"
+```
+---
 
-The `source_data/` directory might contain raw or initial datasets, and the `data/` directory could be used for processed or intermediate data files.
+## ⚙️ Configuration & Environment
 
+All settings are managed in `config.py` and loaded from `.env`. Here's what you can customize:
 
+| Variable | Purpose | Required | Example |
+|----------|---------|----------|---------|
+| `MONGO_URI` | MongoDB connection | ✅ Yes | `mongodb+srv://...` |
+| `MONGO_DB_NAME` | Database name | ✅ Yes | `llmium_db` |
+| `MONGO_COLLECTION_NAME` | Collection name | ✅ Yes | `training_data` |
+| `GROQ_API_KEY` | For LLM synthetic data | ❌ Optional | `gsk_...` |
+| `HF_API_TOKEN` | For reward evaluation | ❌ Optional | `hf_...` |
+| `MAX_PARALLEL_REQUESTS` | Concurrent API calls | ❌ Optional | `5` (default: 1) |
 
-## Docker
+---
 
-A `Dockerfile` is provided for containerizing the application. To build and run the Docker image:
-
-1.  **Build the image:**
-    ```bash
-    docker build -t nlp-project .
-    ```
-2.  **Run the container:**
-    ```bash
-    docker run -d --env-file .env -p <host_port>:<container_port> nlp-project
-    ```
-    (You might need to adjust port mappings and ensure the container has access to necessary resources like MongoDB if it's not running within the same Docker network).
-
-## Project Structure
+## 📂 Project Structure
 
 ```
-.
-├── Dockerfile
-├── LICENSE
-├── README.md
-├── config.py
-├── data/
-├── evals/
-├── helpers/
-├── logs/
-├── models/
-├── notebooks/
+llmium/
+├── README.md                         # You are here ✨
+├── requirements.txt                  # Python dependencies
+├── config.py                         # Configuration loader
+├── Dockerfile                        # Container deployment
+│
+├── models/                           # Core ML modules
+│   ├── finetune_model.py            # Model fine-tuning pipeline
+│   ├── generate_synthetic_data.py    # QA pair generation
+│   ├── reward_model.py              # Quality evaluation
+│   ├── embeddings_model.py          # Semantic embedding training
+│   ├── tokenizer_model.py           # Custom tokenizer creation
+│   └── preprocess_data.py           # Text chunking & preprocessing
+│
+├── notebooks/                        # Jupyter notebooks for exploration
+│   ├── model.ipynb
 │   ├── process_data.ipynb
+│   ├── rl_model.ipynb
 │   └── semantic_process.ipynb
-├── outputs/
-├── requirements.txt
-├── source_data/
-├── Tashkeela-arabic-diacritized-text-utf8-0.3/
-└── utils/
-    ├── __init__.py
-    ├── logger.py
-    └── reward_functions.py
+│
+├── data/                            # Processed & intermediate data
+│   ├── data1.jsonl
+│   ├── processed_data.jsonl
+│   └── english/
+│
+├── source_data/                     # Raw datasets (Arabic Islamic texts)
+│   ├── أحكام القرآن للجصاص.txt
+│   ├── البحر المحيط.txt
+│   └── ... 50+ Islamic legal texts
+│
+├── helpers/                         # Utility functions
+│   ├── get_prompt.py
+│   └── json2mongo.py
+│
+├── evals/                           # Evaluation scripts
+│   └── reasoning_eval.py
+│
+└── utils/                           # Core utilities
+    ├── logger.py                    # Structured logging
+    └── reward_functions.py          # Evaluation metrics
 ```
 
-## Contributing
 
-Contributions are welcome! Please follow these steps:
 
-1.  Fork the repository.
-2.  Create a new branch (`git checkout -b feature/your-feature-name`).
-3.  Make your changes.
-4.  Commit your changes (`git commit -m 'Add some feature'`).
-5.  Push to the branch (`git push origin feature/your-feature-name`).
-6.  Open a Pull Request.
+## 🐳 Docker Deployment
 
-Please ensure your code adheres to the project's coding standards and includes tests where appropriate.
+Deploy LLMium in seconds with Docker:
 
-## License
+**Build the container:**
+```bash
+docker build -t llmium:latest .
+```
 
-This project is licensed under the terms of the LICENSE file.
+**Run with environment variables:**
+```bash
+docker run -d \
+  --name llmium \
+  --env-file .env \
+  -p 8000:8000 \
+  llmium:latest
+```
+
+**Using Docker Compose (recommended):**
+```bash
+docker-compose up -d
+```
+
+> 📌 **Note:** Ensure MongoDB is accessible from the container (same network or remote connection).
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions from researchers, engineers, and enthusiasts!
+
+**How to contribute:**
+
+1. 🍴 Fork the repository
+2. 🌿 Create a feature branch: `git checkout -b feature/amazing-feature`
+3. ✏️ Make your changes and commit: `git commit -m 'Add amazing feature'`
+4. 📤 Push to your fork: `git push origin feature/amazing-feature`
+5. 🔄 Open a Pull Request
+
+**Guidelines:**
+- Write clean, well-documented code
+- Include tests for new functionality
+- Follow Python PEP 8 style guide
+- Add docstrings to functions and classes
+- Update README for new features
+
+---
+
+## 📄 License
+
+This project is licensed under the terms specified in the `LICENSE` file.
+
+---
+
+## 🙌 Acknowledgments
+
+- **Base Dataset:** [Tashkeela Arabic Diacritized Corpus](https://sourceforge.net/projects/tashkeela/)
+- **Models:** Powered by transformers, HuggingFace, and Groq APIs
+
+---
+
+## 📚 Resources
+
+- 📖 [HuggingFace Documentation](https://huggingface.co/docs)
+- 🚀 [Groq API Guide](https://console.groq.com/docs)
+- 🔧 [vLLM Setup](https://docs.vllm.ai/)
+- 🎓 [Arabic NLP Guide](https://huggingface.co/docs/transformers/tasks/translation#arabic)
+
+---
+
+## 💬 Support
+
+Need help? 
+
+- 📋 Check [Discussions](https://github.com/ghyathmoussa/llm-tool-kit/discussions) for Q&A
+- 🐛 Report bugs via [Issues](https://github.com/ghyathmoussa/llm-tool-kit/issues)
+- 📧 Contact the maintainers
+
+---
+
+**Made with ❤️ by Ghyath Moussa**
