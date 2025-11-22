@@ -373,7 +373,6 @@ This project is licensed under the terms specified in the `LICENSE` file.
 - 📖 [HuggingFace Documentation](https://huggingface.co/docs)
 - 🚀 [Groq API Guide](https://console.groq.com/docs)
 - 🔧 [vLLM Setup](https://docs.vllm.ai/)
-- 🎓 [Arabic NLP Guide](https://huggingface.co/docs/transformers/tasks/translation#arabic)
 
 ---
 
